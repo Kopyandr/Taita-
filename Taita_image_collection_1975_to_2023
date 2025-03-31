@@ -1,0 +1,270 @@
+//var Taita_AOI = ee.FeatureCollection("projects/kopecnyjan/assets/Taita_AOI");
+var point=ee.Geometry.Point(38.3317876667455,-3.4533616115629027);
+//var date =('2008-01-01', '2008-12-31'); 
+//var year= 2008;    
+//var DrySeason1=[12,01,03,31]; // Month,Day,Month,Day Dec 1 to Mar 31 
+//var DrySeason2=[6,01,10,31]; //June 1 to Oct 31
+//var collection1='LANDSAT/LE07/C02/T1_L2'
+
+// ______________________________________________________________
+//            functions used while searching for images
+//________________________________________________________
+// scale function for LS 5 and 7 images
+function applyScaleFactors(image) {
+  // Scale the optical bands: selects any band starting with 'SR_B'
+  var opticalBands = image.select('SR_B.').multiply(0.0000275).add(-0.2);
+  // Scale the thermal band ('ST_B')
+  var thermalBand = image.select('ST_B.*').multiply(0.00341802).add(149.0);
+  // Overwrite the original bands with the scaled versions
+  return image.addBands(opticalBands, null, true)
+              .addBands(thermalBand, null, true);
+}
+
+//returns a collection of dry seasons from 2 consecutive years 
+function getCollection (year,collection) {  
+  var year1 = year-1;
+  var year2 = year ;
+  var year3 = year+1;
+  
+  var start1=ee.Date.fromYMD(year1,DrySeason1[0],DrySeason1[1]);//
+  var finish1= ee.Date.fromYMD(year2,DrySeason1[2],DrySeason1[3]);
+  var start2=ee.Date.fromYMD(year2,DrySeason2[0],DrySeason2[1]);//
+  var finish2=ee.Date.fromYMD(year2,DrySeason2[2],DrySeason2[3]);
+  var start3=ee.Date.fromYMD(year2,DrySeason1[0],DrySeason1[1]);//
+  var finish3=ee.Date.fromYMD(year3,DrySeason1[2],DrySeason1[3]);
+  var start4=ee.Date.fromYMD(year3,DrySeason2[0],DrySeason2[1]);//
+  var finish4=ee.Date.fromYMD(year3,DrySeason2[2],DrySeason2[3]);
+  
+  var collection1 = ee.ImageCollection(collection)
+    .filterBounds(point)
+    .filterDate(start1, finish1)
+    .sort('CLOUD_COVER', true)
+    .map(applyScaleFactors);  
+  var collection2 = ee.ImageCollection('LANDSAT/LE07/C02/T1_L2')
+    .filterBounds(point)
+    .filterDate(start2, finish2)
+    .sort('CLOUD_COVER', true)
+    .map(applyScaleFactors); 
+  var collection3 = ee.ImageCollection('LANDSAT/LE07/C02/T1_L2')
+    .filterBounds(point)
+    .filterDate(start3, finish3)
+    .sort('CLOUD_COVER', true)
+    .map(applyScaleFactors);  
+  var collection4 = ee.ImageCollection('LANDSAT/LE07/C02/T1_L2')
+    .filterBounds(point)
+    .filterDate(start4, finish4)
+    .sort('CLOUD_COVER', true)
+    .map(applyScaleFactors); 
+  // megreg the collections: 
+  var Merged=collection1  
+    .merge(collection2)
+    .merge(collection3)
+    .merge(collection4);
+    
+  return Merged;
+}
+
+// cloud mask representing just QA_cloud positve pixels
+function getCloudMask (image) {
+  var qa = image.select('QA_PIXEL');
+  // Landsat 7: bit 3 indicates cloud
+  var cloudBitMask = 1 << 3; // << create binary mask binarymask = 1000 
+  // Binary cloud mask: 1 for cloud, 0 for clear.
+    var cloudMask = qa.bitwiseAnd(cloudBitMask).neq(0);// compare clodBitMask bit to the pixel QA vit value
+  return cloudMask; 
+} 
+
+function getClouds2(image) {
+  var qa = image.select('QA_PIXEL');
+  
+  var qaMask = qa.bitwiseAnd(parseInt('11111', 2)).eq(0);
+  var saturationClear = image.select('QA_RADSAT').eq(0);
+  var cloudFlag = qa.bitwiseAnd(1 << 3).neq(0);
+  
+  var cloudConfidence = qa.rightShift(8).bitwiseAnd(3).gte(2); 
+  var shadowConfidence = qa.rightShift(10).bitwiseAnd(3).gte(2);
+  
+  var problematic = cloudFlag.or(cloudConfidence).or(shadowConfidence);
+  var clearMask = qaMask.and(saturationClear).and(problematic.not());
+  // adds a buffer 
+  var buffer = 5;
+  var dilatedMask = clearMask.focal_min({
+    radius: buffer, 
+    kernel: ee.Kernel.square(buffer), 
+    iterations: 1
+  });
+  
+  return image.updateMask(dilatedMask);
+}
+
+function getCloudFraction(image){
+  
+  var cloudMask= getCloudMask(image); // call CloudMask function 
+  
+  // Compute the number of CLOUD pixels in the geometry -> dict 
+  var cloudStats = cloudMask.reduceRegion({ 
+    reducer: ee.Reducer.sum(), // sum the values of the cloudMask layer 
+    geometry: Taita_AOI, // area of interest params 
+    scale: 30, // resolution 
+    maxPixels: 1e9 // limit 
+  });
+  
+  // A total amount of pixels in the cliped image 
+  var totalStats = image.select(0).reduceRegion({
+    reducer: ee.Reducer.count(),
+    geometry: Taita_AOI,
+    scale: 30,
+    maxPixels: 1e9
+  });
+  
+  //_____________cloud fraction___________________ 
+  var cloudPixels = ee.Number(cloudStats.get(cloudMask.bandNames().get(0))); // get the sum oc Cloud pixels from the cloudStats dict
+  var totalPixels = ee.Number(totalStats.get(image.select(0).bandNames().get(0))); // sum of all pixies 
+  
+  // Cloaud fraction calculation 
+  var cloudFraction = ee.Algorithms.If(totalPixels.gt(0), // dont devide by 0 
+                                       cloudPixels.divide(totalPixels), // 
+                                       0);
+  
+  // Set the computed cloud fraction as a property on the image
+  return image.set('cloud_fraction', cloudFraction);
+}
+
+function getNDVI(image) {
+  var ndvi = image.normalizedDifference(['SR_B4', 'SR_B3']).rename('NDVI');
+  return image.addBands(ndvi);
+}
+
+//________________________________________________________________
+//            viz Parameters for diferent Landsat products
+// ________________________________________________________________
+var vizParams = {bands: ['SR_B3','SR_B2','SR_B1'], min: 0.0, max:0.3}; // LS 5 and 7 
+
+var vizParamsL8 = { // Landsat 8 and 9 
+  bands: ['SR_B4', 'SR_B3', 'SR_B2'],
+  min: 0.0,
+  max: 0.3,
+}; 
+
+// Landsat Global Land Survey 1975 viz params 
+var falseColor = {
+  gamma: 2.2,
+};
+
+// image 1975
+var image1975 = (ee.Image('LANDSAT/GLS1975/p179r062_2x19750621')).select(['30', '20', '10']);
+print('Image 1975/06/21:', image1975);
+Map.addLayer(image1975,falseColor, 'image 1975');
+
+// image 1975 
+var image1975_2 = (ee.Image('LANDSAT/GLS1975/p179r063_2x19750727')).select(['30', '20', '10']);
+print('Image 1975/07/27:',image1975_2)
+Map.addLayer(  image1975_2,falseColor, 'image 1975');
+
+// 1987 image 1 
+var image1987a=applyScaleFactors(ee.Image('LANDSAT/LT05/C02/T1_L2/LT05_167062_19870218'));
+print('image 1987', image1987a);
+Map.addLayer(image1987a,vizParams, 'image 1987');
+
+// 1987 image 2 
+var image1987b=applyScaleFactors(ee.Image('LANDSAT/LT05/C02/T1_L2/LT05_167062_19870202'));
+print('image 1987', image1987b);
+Map.addLayer(image1987b,vizParams, 'image 1987'); 
+
+// 1995 image  
+var image1995 = applyScaleFactors(ee.Image('LANDSAT/LT05/C02/T1_L2/LT05_167062_19950123'));
+print('image 1995', image1995);
+
+// year 2000 
+var image2000= applyScaleFactors(ee.Image('LANDSAT/LE07/C02/T1_L2/LE07_167062_20000129'))//.clip(Taita_AOI)
+print('image 2000', image2000);
+Map.addLayer(image2000,vizParams, 'image 2000',false);
+
+// year 2003
+var image2003= applyScaleFactors(ee.Image('LANDSAT/LE07/C02/T1_L2/LE07_167062_20030206'))//.clip(Taita_AOI)
+print(' image 2003', image2000);
+Map.addLayer(image2003,vizParams, 'image 2003',false);
+//_____________________________________________________________
+//                     SLC-off images 
+// images used in composites to fill the SLC-off gaps viz.table
+//___________________________________________________________
+// 2002-07-13 image
+var image20020713 = applyScaleFactors(ee.Image('LANDSAT/LE07/C02/T1_L2/LE07_167062_20020713'));
+print('Image 20020713', image20020713);
+Map.addLayer(image20020713, vizParams, 'Image 20020713', false);
+
+// 2002-10-01 image
+var image20021001 = applyScaleFactors(ee.Image('LANDSAT/LE07/C02/T1_L2/LE07_167062_20021001'));
+print('Image 20021001', image20021001);
+Map.addLayer(image20021001, vizParams, 'Image 20021001',false);
+//______________________________________
+// 2005-02-27 image
+var image20050227 = applyScaleFactors(ee.Image('LANDSAT/LE07/C02/T1_L2/LE07_167062_20050227'));
+print('Image 20050227', image20050227);
+Map.addLayer(image20050227, vizParams, 'Image 20050227',false);
+
+// 2005-08-22 image
+var image20050822 = applyScaleFactors(ee.Image('LANDSAT/LE07/C02/T1_L2/LE07_167062_20050822'));
+print('Image 20050822', image20050822);
+Map.addLayer(image20050822, vizParams, 'Image 20050822',false);
+// //______________________________________
+// 2006-01-29 image
+var image20060129 = applyScaleFactors(ee.Image('LANDSAT/LE07/C02/T1_L2/LE07_167062_20060129'));
+print('Image 20060129', image20060129);
+Map.addLayer(image20060129, vizParams, 'Image 2006 01 29',false);
+
+// 2007-10-15 image (first instance)
+var image20071015 = applyScaleFactors(ee.Image('LANDSAT/LE07/C02/T1_L2/LE07_167062_20071015'));
+print('Image 20071015', image20071015);
+Map.addLayer(image20071015, vizParams, 'Image 2007 10 15',false);
+//________________________________________________
+// 2008-10-01 image (first instance)
+var image20081001 = applyScaleFactors(ee.Image('LANDSAT/LE07/C02/T1_L2/LE07_167062_20081001'));
+print('Image 20081001', image20081001);
+Map.addLayer(image20081001, vizParams, 'Image 20081001',false);
+
+// 2009-10-04 image (first instance)
+var image20091004 = applyScaleFactors(ee.Image('LANDSAT/LE07/C02/T1_L2/LE07_167062_20091004'));
+print('Image 20091004', image20091004);
+Map.addLayer(image20091004, vizParams, 'Image 20091004',false);
+
+// 2010-10-07 image
+var image20101007 = applyScaleFactors(ee.Image('LANDSAT/LE07/C02/T1_L2/LE07_167062_20101007'));
+print('Image 20101007', image20101007);
+Map.addLayer(image20101007, vizParams, 'Image 20101007',false);
+//__________________________________________________________________
+//__________________________________________________________________
+
+// 2015 image 
+var image2015=applyScaleFactors(ee.Image('LANDSAT/LC08/C02/T1_L2/LC08_167062_20150130'));
+print('image 2015', image2015);
+Map.addLayer(image2015 ,vizParamsL8, 'image 2015'); 
+
+//2017 image
+var image2017=applyScaleFactors(ee.Image('LANDSAT/LC08/C02/T1_L2/LC08_167062_20170308'));
+print('image 2017', image2017);
+Map.addLayer(image2017 ,vizParamsL8, 'image 2017'); 
+
+//2022 image 
+var image2022=applyScaleFactors(ee.Image('LANDSAT/LC09/C02/T1_L2/LC09_167062_20220226'));
+print('image 2022', image2022);
+Map.addLayer(image2022 ,vizParamsL8, 'image 2022'); 
+
+
+// 2023 image 
+var image2023=applyScaleFactors(ee.Image('LANDSAT/LC08/C02/T1_L2/LC08_167062_20230205'));
+print('image 2023', image2015);
+Map.addLayer(image2023 ,vizParamsL8, 'image 2023'); 
+
+
+// ______________________ ALL image collection______________________________________
+var allImages = ee.ImageCollection.fromImages([
+  image1975, image1975_2, image1987a, image1987b, image1995,
+  image2000, image2003, image20020713, image20021001,
+  image20050227, image20050822, image20060129, image20071015,
+  image20081001, image20091004, image20101007,
+  image2015, image2017, image2022, image2023
+  
+]);
+
+print('All Images Collection:', allImages);
