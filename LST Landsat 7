@@ -1,0 +1,626 @@
+*
+  Code:
+  
+   Year composites: 
+          filters cirrus based on QA "snow" flag (not working very well)
+          creates LST composites for choosen years (average, median, 75 percentile)
+          
+    Dry seasoson LST image:
+          chooses a best (cloud free) image from given years 
+          
+            -> in map labeled as : LST year (°C)
+    
+    NDVI 2 image composites:
+          NDVI: 2 image composites for reference (Temperature/ Landcover observation)
+          
+          
+    -> different scale for single LST image : min: 23.050449319999984, max: 67.90512578000005 
+    
+    -> and LST composites : min: 21, max: 64
+    
+    ??
+    Missing pixels appart from the SLC-off stripes? 
+    They are the same pixels in all the images 
+*/
+
+var Taita = ee.FeatureCollection("projects/kopecnyjan/assets/Taita_AOI");
+var point=ee.Geometry.Point(38.3317876667455,-3.4533616115629027);
+var date =('2008-01-01', '2008-12-31'); 
+//var year= 2008;    
+var DrySeason1=[12,01,03,31]; // Month,Day,Month,Day Dec 1 to Mar 31 
+var DrySeason2=[6,01,10,31]; //June 1 to Oct 31
+var collection1='LANDSAT/LE07/C02/T1_L2'
+var bufferDistance = 2000;
+
+// Apply buffer to each feature
+//var Taita_AOI = Taita.map(function(feature) {
+//  return feature.buffer(bufferDistance);
+//});
+
+// scaling function 
+function applyScaleFactors(image) {
+  // Scale the optical bands: selects any band starting with 'SR_B'
+  var opticalBands = image.select('SR_B.').multiply(0.0000275).add(-0.2);
+  // Scale the thermal band ('ST_B')
+  var thermalBand = image.select('ST_B6').multiply(0.00341802).add(149.0);
+  // Overwrite the original bands with the scaled versions.
+  return image.addBands(opticalBands, null, true)
+              .addBands(thermalBand, null, true);
+}
+
+// Extract collection from given dates 
+function getCollection (year,collection) {
+  var year1 = year-1;
+  var year2 = year ;
+  var year3 = year+1;
+  var start1=ee.Date.fromYMD(year1,DrySeason1[0],DrySeason1[1]);//
+  var finish1= ee.Date.fromYMD(year2,DrySeason1[2],DrySeason1[3]);
+  var start2=ee.Date.fromYMD(year2,DrySeason2[0],DrySeason2[1]);//
+  var finish2=ee.Date.fromYMD(year2,DrySeason2[2],DrySeason2[3]);
+  var start3=ee.Date.fromYMD(year2,DrySeason1[0],DrySeason1[1]);//
+  var finish3=ee.Date.fromYMD(year3,DrySeason1[2],DrySeason1[3]);
+  var start4=ee.Date.fromYMD(year3,DrySeason2[0],DrySeason2[1]);//
+  var finish4=ee.Date.fromYMD(year3,DrySeason2[2],DrySeason2[3]);
+  
+  var collection1 = ee.ImageCollection(collection)
+    .filterBounds(point)
+    .filterDate(start1, finish1)
+    .sort('CLOUD_COVER', true)
+    .map(applyScaleFactors);  
+  var collection2 = ee.ImageCollection('LANDSAT/LE07/C02/T1_L2')
+    .filterBounds(point)
+    .filterDate(start2, finish2)
+    .sort('CLOUD_COVER', true)
+    .map(applyScaleFactors); 
+  var collection3 = ee.ImageCollection('LANDSAT/LE07/C02/T1_L2')
+    .filterBounds(point)
+    .filterDate(start3, finish3)
+    .sort('CLOUD_COVER', true)
+    .map(applyScaleFactors);  
+  var collection4 = ee.ImageCollection('LANDSAT/LE07/C02/T1_L2')
+    .filterBounds(point)
+    .filterDate(start4, finish4)
+    .sort('CLOUD_COVER', true)
+    .map(applyScaleFactors); 
+  // megreg the collections: 
+  var Merged=collection1  
+    .merge(collection2)
+    .merge(collection3)
+    .merge(collection4);
+    
+  return Merged;
+}
+
+function getClouds2(image) {
+  var qa = image.select('QA_PIXEL');
+  
+  var qaMask = qa.bitwiseAnd(parseInt('11111', 2)).eq(0);
+  var saturationClear = image.select('QA_RADSAT').eq(0);
+  var cloudFlag = qa.bitwiseAnd(1 << 3).neq(0);
+  //var cirrusFlag = qa.bitwiseAnd(1 << 6).neq(0);
+  
+  var cloudConfidence = qa.rightShift(8).bitwiseAnd(3).gte(2); 
+  var shadowConfidence = qa.rightShift(10).bitwiseAnd(3).gte(2);
+  
+  var problematic = cloudFlag.or(cloudConfidence).or(shadowConfidence)//.or(cirrusFlag);
+  var clearMask = qaMask.and(saturationClear).and(problematic.not());
+  // adds a buffer 
+  var buffer = 5;
+  var dilatedMask = clearMask.focal_min({
+    radius: buffer, 
+    kernel: ee.Kernel.square(buffer), 
+    iterations: 1
+  });
+  
+  return image.updateMask(dilatedMask);
+}
+
+// masking of ice -> cirrus clouds 
+function maskIce(image) {
+  // Select the QA_PIXEL band 
+  var qa = image.select('QA_PIXEL');
+  var snowFlag = qa.bitwiseAnd(1 << 5).neq(0);
+  var clearMask = snowFlag.not();
+  return image.updateMask(clearMask);
+}
+
+// fraction computed from just QA_cloud positve pixels
+function getCloudMask (image) {
+  var qa = image.select('QA_PIXEL');
+  // Landsat 7: bit 3 indicates cloud
+  var cloudBitMask = 1 << 3; // << create binary mask binarymask = 1000 
+  // Binary cloud mask: 1 for cloud, 0 for clear.
+    var cloudMask = qa.bitwiseAnd(cloudBitMask).neq(0);// compare clodBitMask bit to the pixel QA vit value
+  return cloudMask; 
+} 
+
+function getCloudFraction(image){
+  
+  var cloudMask= getCloudMask(image); // call CloudMask function 
+  
+  // Compute the number of CLOUD pixels in the geometry -> dict 
+  var cloudStats = cloudMask.reduceRegion({ 
+    reducer: ee.Reducer.sum(), // sum the values of the cloudMask layer 
+    geometry: Taita_AOI, // area of interest params 
+    scale: 30, // resolution 
+    maxPixels: 1e9 // limit 
+  });
+  
+  // A total amount of pixels in the cliped image 
+  var totalStats = image.select(0).reduceRegion({
+    reducer: ee.Reducer.count(),
+    geometry: Taita_AOI,
+    scale: 30,
+    maxPixels: 1e9
+  });
+  
+  //_____________cloud fraction___________________ 
+  var cloudPixels = ee.Number(cloudStats.get(cloudMask.bandNames().get(0))); // get the sum oc Cloud pixels from the cloudStats dict
+  var totalPixels = ee.Number(totalStats.get(image.select(0).bandNames().get(0))); // sum of all pixies 
+  
+  // Cloaud fraction calculation 
+  var cloudFraction = ee.Algorithms.If(totalPixels.gt(0), // dont devide by 0 
+                                       cloudPixels.divide(totalPixels), // 
+                                       0);
+  
+  // Set the computed cloud fraction as a property on the image
+  return image.set('cloud_fraction', cloudFraction);
+}
+
+function getNDVI(image) {
+  var ndvi = image.normalizedDifference(['SR_B4', 'SR_B3']).rename('NDVI');
+  return image.addBands(ndvi);
+}
+
+
+var multipleyearfilter=0.2
+// import all year colllection 
+var collection2002 = ee.ImageCollection('LANDSAT/LE07/C02/T1_L2')
+    .map(getCloudFraction)
+    .map(getClouds2)
+    .map(maskIce)
+    .filter(ee.Filter.lt('cloud_fraction', multipleyearfilter))
+    .filterBounds(point)
+    .filterDate('2002-01-01', '2002-12-31')
+    .sort('CLOUD_COVER', true)
+    .map(function(img) {
+      return applyScaleFactors(img.clip(Taita_AOI));
+    });
+ print ('year 2002 LST composite:',collection2002)
+ 
+var collection2005=ee.ImageCollection('LANDSAT/LE07/C02/T1_L2') 
+    .map(getCloudFraction)
+    .map(maskIce)
+    .map(getClouds2)
+    .filter(ee.Filter.lt('cloud_fraction', multipleyearfilter))
+    .filterBounds(point)
+    .filterDate('2005-01-01', '2005-12-31')
+    .sort('CLOUD_COVER', true)
+    .map(function(img) {
+      return applyScaleFactors(img.clip(Taita_AOI));
+    });
+print ('year 2005 LST composite:',collection2005)
+
+var collection2007  =ee.ImageCollection('LANDSAT/LE07/C02/T1_L2')  
+    .map(getCloudFraction)
+    .map(maskIce)
+    .map(getClouds2)
+    .filter(ee.Filter.lt('cloud_fraction', multipleyearfilter))
+    .filterBounds(point)
+    .filterDate('2007-01-01', '2007-12-31')
+    .sort('CLOUD_COVER', true)
+    .map(function(img) {
+      return applyScaleFactors(img.clip(Taita_AOI));
+    });
+ print ('year 2007 LST composite:',collection2007)
+ 
+var collection2008= ee.ImageCollection('LANDSAT/LE07/C02/T1_L2')  
+    .filterBounds(point)
+    .map(getCloudFraction)
+    .map(maskIce)
+    .map(getClouds2)
+    .filterDate('2008-01-01', '2008-12-31')
+    .sort('CLOUD_COVER', true)
+    .map(function(img) {
+      return applyScaleFactors(img.clip(Taita_AOI));
+    });
+ print ('year 2008 LST composite:',collection2008)
+ 
+var collection2009=ee.ImageCollection('LANDSAT/LE07/C02/T1_L2') 
+    .map(getCloudFraction)
+    .map(maskIce)
+    .map(getClouds2)
+    .filter(ee.Filter.lt('cloud_fraction', multipleyearfilter))
+    .filterBounds(point)
+    .filterDate('2009-01-01', '2009-12-31')
+    .sort('CLOUD_COVER', true)
+    .map(function(img) {
+      return applyScaleFactors(img.clip(Taita_AOI));
+    });
+print ('year 2009 LST composite:',collection2009)
+
+var collection2011=ee.ImageCollection('LANDSAT/LE07/C02/T1_L2')   
+    .map(getCloudFraction)
+    .map(maskIce)
+    .map(getClouds2)
+    .filter(ee.Filter.lt('cloud_fraction', multipleyearfilter))
+    .filterBounds(point)
+    .filterDate('2011-01-01', '2011-12-31')
+    .sort('CLOUD_COVER', true)
+    .map(function(img) {
+      return applyScaleFactors(img.clip(Taita_AOI));
+    });
+print ('year 2011 LST composite:',collection2011)
+//___________________________________________________________
+
+
+  
+//___________________________________________________
+
+var vizParams = {bands: ['SR_B3','SR_B2','SR_B1'], min: 0.0, max: 0.3};
+var vizParamsQ1 = {bands: ['SR_B3_p25','SR_B2_p25','SR_B1_p25'], min: 0.0, max: 0.3}; // set params for quartiles 
+var vizParamsQ2 = {bands: ['SR_B3_p75','SR_B2_p75','SR_B1_p75'], min: 0.0, max: 0.3};
+var vizParamsNDVI = {bands: ['NDVI'], min: 0.0, max: 0.3, palette:['white','green']};
+
+var lstVis = {min: 21, max: 64, palette: ['blue', 'green', 'yellow', 'red']};
+//average 
+var lst2002 = collection2002.select('ST_B6').mean().subtract(273.15);
+var lst2005 = collection2005.select('ST_B6').mean().subtract(273.15);
+var lst2007 = collection2007.select('ST_B6').mean().subtract(273.15);
+var lst2008 = collection2008.select('ST_B6').mean().subtract(273.15);
+var lst2009 = collection2009.select('ST_B6').mean().subtract(273.15);
+var lst2011 = collection2011.select('ST_B6').mean().subtract(273.15);
+//median 
+var medlst2002 = collection2002.select('ST_B6').median().subtract(273.15);
+var medlst2005 = collection2005.select('ST_B6').median().subtract(273.15);
+var medlst2007 = collection2007.select('ST_B6').median().subtract(273.15);
+var medlst2008 = collection2008.select('ST_B6').median().subtract(273.15);
+var medlst2009 = collection2009.select('ST_B6').median().subtract(273.15);
+var medlst2011 = collection2011.select('ST_B6').median().subtract(273.15);
+//75 percentile 
+var qlst2002 = collection2002.select('ST_B6').reduce(ee.Reducer.percentile([75])).subtract(273.15);
+var qlst2005 = collection2005.select('ST_B6').reduce(ee.Reducer.percentile([75])).subtract(273.15);
+var qlst2007 = collection2007.select('ST_B6').reduce(ee.Reducer.percentile([75])).subtract(273.15);
+var qlst2008 = collection2008.select('ST_B6').reduce(ee.Reducer.percentile([75])).subtract(273.15);
+var qlst2009 = collection2009.select('ST_B6').reduce(ee.Reducer.percentile([75])).subtract(273.15);
+var qlst2011 = collection2011.select('ST_B6').reduce(ee.Reducer.percentile([75])).subtract(273.15);
+
+//_____________________________________________________________________
+                  //   LST stats from average values ! 
+//_____________________________________________________________________
+//var collections = [lst2002,lst2005,lst2007 ,lst2008 ,lst2009 ,lst2011 ];
+var collections = [collection2002,collection2005,collection2007,collection2008,collection2009,collection2011]  
+var years = ['2002','2005','2007','2008','2009','2011'];
+
+// Loop through each collection
+years.forEach(function(year, index) {
+  var col = ee.ImageCollection(collections[index]).select('ST_B6');
+  
+  // Compute pixelwise min and max for each year's collection
+  var minImage = col.min();
+  var maxImage = col.max();
+  
+  // Reduce over your region to get scalar values
+  var statsMin = minImage.reduceRegion({
+    reducer: ee.Reducer.min(),
+    geometry: Taita_AOI,
+    scale: 60,
+    bestEffort: true,
+    maxPixels: 1e9
+  });
+  
+  var statsMax = maxImage.reduceRegion({
+    reducer: ee.Reducer.max(),
+    geometry: Taita_AOI,
+    scale: 60,
+    bestEffort: true,
+    maxPixels: 1e9
+  });
+  
+  // Optionally convert from Kelvin to Celsius
+  var minC = ee.Number(statsMin.get('ST_B6')).subtract(273.15);
+  var maxC = ee.Number(statsMax.get('ST_B6')).subtract(273.15);
+  
+  print('Year ' + year + ' LST stats ():', statsMin, statsMax);
+  print('Year ' + year + ' LST stats (°C):', minC, maxC);
+});    
+
+
+//_____________________________________________________________________
+// Add each average LST layer to the map.
+Map.addLayer(lst2002, lstVis, 'Avg LST 2002 (°C)',false);
+Map.addLayer(lst2005, lstVis, 'Avg LST 2005 (°C)',false);
+Map.addLayer(lst2007, lstVis, 'Avg LST 2007 (°C)',false);
+Map.addLayer(lst2008, lstVis, 'Avg LST 2008 (°C)',false);
+Map.addLayer(lst2009, lstVis, 'Avg LST 2009 (°C)',false);
+Map.addLayer(lst2011, lstVis, 'Avg LST 2011 (°C)',false);
+
+Map.addLayer(medlst2002, lstVis, 'median LST 2002 (°C)',false);
+Map.addLayer(medlst2005, lstVis, 'median LST 2005 (°C)',false);
+Map.addLayer(medlst2007, lstVis, 'median LST 2007 (°C)',false);
+Map.addLayer(medlst2008, lstVis, 'median LST 2008 (°C)',false);
+Map.addLayer(medlst2009, lstVis, 'median LST 2009 (°C)',false);
+Map.addLayer(medlst2011, lstVis, 'median LST 2011 (°C)',false);
+
+Map.addLayer(qlst2002, lstVis, 'q75 LST 2002 (°C)',false);
+Map.addLayer(qlst2005, lstVis, 'q75 LST 2005 (°C)',false);
+Map.addLayer(qlst2007, lstVis, 'q75 LST 2007 (°C)',false);
+Map.addLayer(qlst2008, lstVis, 'q75 LST 2008 (°C)',false);
+Map.addLayer(qlst2009, lstVis, 'q75 LST 2009 (°C)',false);
+Map.addLayer(qlst2011, lstVis, 'q75 LST 2011 (°C)',false);
+//___________________________________________________________________
+
+
+
+//___________________________________________________________________
+                  // Dry season composites: 
+//___________________________________________________________________
+                    // 2002 - 2002 
+var  cloudThreshold = 0.01
+var SampledCollection1=getCollection(2002,collection1);// gets collections for dry seasons function 
+//print('2003- 2004',SampledCollection1)
+var SampledColl1 = SampledCollection1
+  .map(function(image) {
+    return image.clip(Taita_AOI);
+  })
+  .map(getCloudFraction)
+  .filter(ee.Filter.lt('cloud_fraction', cloudThreshold))
+  .sort('cloud_fraction', true)
+  .map(getClouds2)
+  .map(getNDVI);
+print('dry season  2002- 2002 ',SampledColl1);
+
+var LS5List = SampledColl1.toList(SampledColl1.size());
+var numImages = LS5List.size().getInfo();
+//print('Number 2006-2007 LS 5 :', numImages);
+var sampleList = SampledColl1.toList(SampledColl1.size());
+var sample1= ee.Image(sampleList.get(0));
+var sample2= ee.Image(sampleList.get(1));
+//var sample3=ee.Image(sampleList.get(4));
+var sampledImages= ee.ImageCollection([sample1, sample2]);
+
+//var TrivialComp= TrivialFill(sample1, sample2);//###
+//Map.addLayer(TrivialComp,vizParams, 'Gap‑filled Sample',false);
+
+
+var Drymed=sampledImages.median(); // just two images 
+
+Map.addLayer(Drymed,vizParamsNDVI, '!! Dry NDVI 2002 - 2003',false);
+
+//Map.addLayer(Drymed,vizParams, '!! Dry NDVI 2002 - 2003',false);
+//Map.addLayer(Drymedian2003,vizParamsNDVI, ' Dry NDVI 2002 - 2003',false);
+//Map.addLayer(Drymedian2003,vizParams, 'Dry median 2002 - 2003',false);
+
+var LST= ((ee.Image(LS5List.get(0))).select('ST_B6')).subtract(273.15);
+
+Map.addLayer(LST, 
+  {min: 23.050449319999984, max: 67.90512578000005, palette: ['blue', 'green', 'yellow', 'red']}, 
+  'LST 2002 (°C)');
+
+/*
+for (var i = 0; i < numImages; i++) {
+  var image = ee.Image(LS5List.get(i));
+  //Map.addLayer(image, vizParams, '2003 image ' + (i + 1));
+  Map.addLayer(image,vizParamsNDVI, '2002 image NDVI ' + (i + 1),false);
+}
+*/
+// ________________________________________________________________
+
+var  cloudThreshold = 0.01
+var SampledCollection2=getCollection(2005,collection1);// gets collections for dry seasons function 
+//print('2005- 2006',SampledCollection2)
+var SampledColl2 = SampledCollection2
+  .map(function(image) {
+    return image.clip(Taita_AOI);
+  })
+  .map(getCloudFraction)
+  .filter(ee.Filter.lt('cloud_fraction', cloudThreshold))
+  .sort('cloud_fraction', true)
+  .map(getClouds2)
+  .map(getNDVI)
+  .map(maskIce);
+print('dry season  2005- 2006 ',SampledColl2);
+
+var LS5List = SampledColl2.toList(SampledColl2.size());
+var numImages = LS5List.size().getInfo();
+var LST1= ((ee.Image(LS5List.get(0))).select('ST_B6')).subtract(273.15);
+
+//print('Number 2006-2007 LS 5 :', numImages);
+var Drymedian2005=SampledColl2.median();
+Map.addLayer(Drymedian2005,vizParamsNDVI, ' Dry NDVI 2005 - 2006',false);
+//Map.addLayer(Drymedian2005,vizParams, 'Dry median 2005 - 2006',false); //#####x
+
+Map.addLayer(LST1, 
+  {min: 23.050449319999984, max: 67.90512578000005, palette: ['blue', 'green', 'yellow', 'red']}, 
+  'LST 2005 (°C)');
+
+//_________________________________________________________________
+
+var  cloudThreshold = 0.01
+var SampledCollection7=getCollection(2006,collection1);// gets collections for dry seasons function 
+print('2006- 2007',SampledCollection7)
+var SampledColl7 = SampledCollection7
+  .map(function(image) {
+    return image.clip(Taita_AOI);
+  })
+  .map(getCloudFraction)
+  .filter(ee.Filter.lt('cloud_fraction', cloudThreshold))
+  .sort('cloud_fraction', true)
+  .map(getClouds2)
+  .map(maskIce)
+  .map(getNDVI);
+print('dry season  2006- 2007 ',SampledColl7);
+
+var LS5List = SampledColl7.toList(SampledColl7.size());
+var numImages = LS5List.size().getInfo();
+//print('Number 2006-2007 LS 5 :', numImages);
+var Drymedian2006=SampledColl7.median();
+Map.addLayer(Drymedian2006,vizParamsNDVI, '! Dry NDVI 2006 - 2007',false);
+//Map.addLayer(Drymedian2006,vizParams, 'Dry median 2006 - 2007',false);
+
+var LST6= ((ee.Image(LS5List.get(0))).select('ST_B6')).subtract(273.15);
+Map.addLayer(LST6, 
+  {min: 23.050449319999984, max: 67.90512578000005, palette: ['blue', 'green', 'yellow', 'red']}, 
+  'LST 2007 (°C)');
+
+//_____________________________________________________________2007 - 2008
+
+var  cloudThreshold = 0.01
+var SampledCollection3=getCollection(2007,collection1);// gets collections for dry seasons function 
+//print('2007- 2008',SampledCollection3)
+var SampledColl3 = SampledCollection3
+  .map(function(image) {
+    return image.clip(Taita_AOI);
+  })
+  .map(getCloudFraction)
+  .filter(ee.Filter.lt('cloud_fraction', cloudThreshold))
+  .sort('cloud_fraction', true)
+  .map(getClouds2)
+  .map(getNDVI)
+  .map(maskIce);
+print('filtered dry season  2007- 2008 ',SampledColl3);
+
+var LS5List = SampledColl3.toList(SampledColl3.size());
+var numImages = LS5List.size().getInfo();
+var LST2= ((ee.Image(LS5List.get(0))).select('ST_B6')).subtract(273.15); 
+
+//print('Number 2006-2007 LS 5 :', numImages);
+var Drymedian2007=SampledColl3.median();
+Map.addLayer(Drymedian2007,vizParamsNDVI, 'Dry NDVI 2007 - 2008',false);
+//Map.addLayer(Drymedian2007,vizParams, 'Dry median 2007 - 2008',false);
+/*
+Map.addLayer(LST2, 
+  {min: 23.050449319999984, max: 67.90512578000005, palette: ['blue', 'green', 'yellow', 'red']}, 
+  'LST (°C) 2007');
+*/
+
+/*
+for (var i = 0; i < numImages; i++) {
+  var image = ee.Image(LS5List.get(i));
+  Map.addLayer(image, vizParams, '2007 image ' + (i + 1),false);
+}
+*/
+//___________________________________________________________
+
+var  cloudThreshold = 0.01
+var SampledCollection6=getCollection(2008,collection1);// gets collections for dry seasons function 
+//print('2009- 2010',SampledCollection4)
+var SampledColl6 = SampledCollection6
+  .map(function(image) {
+    return image.clip(Taita_AOI);
+  })
+  .map(getCloudFraction)
+  .filter(ee.Filter.lt('cloud_fraction', cloudThreshold))
+  .sort('cloud_fraction', true)
+  .map(getClouds2)
+  .map(getNDVI)
+  .map(maskIce);
+print('dry season  2008- 2009 ',SampledColl6);
+
+var LS5List = SampledColl6.toList(SampledColl6.size());
+var numImages = LS5List.size().getInfo();
+//print('Number 2006-2007 LS 5 :', numImages);
+var Drymedian2008=SampledColl6.median();
+Map.addLayer(Drymedian2008,vizParamsNDVI, '! Dry NDVI 2008 - 2009',false);
+//Map.addLayer(Drymedian2008,vizParams, '! Dry median 2008 - 2009',false);
+
+var LST5= ((ee.Image(LS5List.get(0))).select('ST_B6')).subtract(273.15);
+Map.addLayer(LST5, 
+  {min: 23.050449319999984, max: 67.90512578000005, palette: ['blue', 'green', 'yellow', 'red']}, 
+  'LST 2008 (°C)');
+//__________________________________________________________________________
+
+var  cloudThreshold = 0.001
+var SampledCollection4=getCollection(2009,collection1);// gets collections for dry seasons function 
+//print('2009- 2010',SampledCollection4)
+var SampledColl4 = SampledCollection4
+  .map(function(image) {
+    return image.clip(Taita_AOI);
+  })
+  .map(getCloudFraction)
+  .filter(ee.Filter.lt('cloud_fraction', cloudThreshold))
+  .sort('cloud_fraction', true)
+  .map(getClouds2)
+  .map(getNDVI)
+  .map(maskIce);
+print('dry season  2009- 2010 ',SampledColl4);
+
+var LS5List = SampledColl4.toList(SampledColl4.size());
+var numImages = LS5List.size().getInfo();
+//print('Number 2006-2007 LS 5 :', numImages);
+var Drymedian2009=SampledColl4.median();
+Map.addLayer(Drymedian2009,vizParamsNDVI, ' Dry NDVI 2009 - 2010',false);
+//Map.addLayer(Drymedian2009,vizParams, 'Dry median 2009 - 2010',false);
+
+var LST3= ((ee.Image(LS5List.get(0))).select('ST_B6')).subtract(273.15);
+Map.addLayer(LST3, 
+  {min: 23.050449319999984, max: 67.90512578000005, palette: ['blue', 'green', 'yellow', 'red']}, 
+  'LST 2009 (°C)');
+
+/*
+for (var i = 0; i < numImages; i++) {
+  var image = ee.Image(LS5List.get(i));
+  Map.addLayer(image, vizParams, '2009-10 image ' + (i + 1),false);
+}
+*/
+//____________________________________________________________________ 2011-2012 
+
+var  cloudThreshold = 0.001
+var SampledCollection5=getCollection(2011,collection1);// gets collections for dry seasons function 
+//print('2011- 2012',SampledCollection5)
+var SampledColl5 = SampledCollection5
+  .map(function(image) {
+    return image.clip(Taita_AOI);
+  })
+  .map(getCloudFraction)
+  .filter(ee.Filter.lt('cloud_fraction', cloudThreshold))
+  .sort('cloud_fraction', true)
+  .map(getClouds2)
+  .map(getNDVI)
+  .map(maskIce);
+print('dry season  2011- 2012 ',SampledColl5);
+
+var LS5List = SampledColl5.toList(SampledColl5.size());
+var numImages = LS5List.size().getInfo();
+//print('Number 2006-2007 LS 5 :', numImages);
+var Drymedian2011=SampledColl5.median();
+Map.addLayer(Drymedian2011,vizParamsNDVI, ' Dry NDVI 2011 - 2012',false);
+//Map.addLayer(Drymedian2011,vizParams, 'Dry median 2011 - 2012',false);
+
+var LST4= ((ee.Image(LS5List.get(0))).select('ST_B6')).subtract(273.15);
+Map.addLayer(LST4, 
+  {min: 23.050449319999984, max: 67.90512578000005, palette: ['blue', 'green', 'yellow', 'red']}, 
+  'LST 2011 (°C)');
+//___________________________________________________________########################################
+
+
+// get statistics for the LST time series(min and max)
+var LSTcollection= ee.ImageCollection.fromImages([LST,LST1, LST2, LST3,LST4,LST5,LST6]);
+var lstMinImage = LSTcollection.min();
+var lstMaxImage = LSTcollection.max();
+// minimum 
+var overallMin = lstMinImage.reduceRegion({
+  reducer: ee.Reducer.min(), 
+  geometry: Taita_AOI,
+  scale: 30,
+  bestEffort: true,
+  maxPixels: 1e9
+});
+// maximum 
+var overallMax = lstMaxImage.reduceRegion({
+  reducer: ee.Reducer.max(), 
+  geometry: Taita_AOI,
+  scale: 30,
+  bestEffort: true,
+  maxPixels: 1e9
+});
+
+print('Overall minimum LST (°C):', overallMin);
+print('Overall maximum LST (°C):', overallMax);
+
+
+
+// Add the AOI and Buffer to the map 
+Map.centerObject(Taita_AOI);
+//Map.addLayer(Taita, {color: 'white'}, 'Original AOI',false);
+//Map.addLayer(Taita_AOI, {color: 'red'}, 'Buffered AOI',false);
