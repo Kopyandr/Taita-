@@ -1,0 +1,980 @@
+var table = ee.FeatureCollection("projects/kopecnyjan/assets/1987_filtered_geo"),
+    table2 = ee.FeatureCollection("projects/kopecnyjan/assets/1995_filtered_geo"),
+    table3 = ee.FeatureCollection("projects/kopecnyjan/assets/2000_filtered_geo"),
+    table4 = ee.FeatureCollection("projects/kopecnyjan/assets/2002_filtered_geo"),
+    table5 = ee.FeatureCollection("projects/kopecnyjan/assets/2005_filtered_geo"),
+    table6 = ee.FeatureCollection("projects/kopecnyjan/assets/2007_filtered_geo"),
+    table7 = ee.FeatureCollection("projects/kopecnyjan/assets/2008_filtered_geo"),
+    table8 = ee.FeatureCollection("projects/kopecnyjan/assets/2009_filtered_geo"),
+    table9 = ee.FeatureCollection("projects/kopecnyjan/assets/2011_filtered_geo"),
+    table10 = ee.FeatureCollection("projects/kopecnyjan/assets/2015_filtered_geo"),
+    table11 = ee.FeatureCollection("projects/kopecnyjan/assets/1860_filtered_geo");
+var Taita = ee.FeatureCollection("projects/kopecnyjan/assets/Taita_AOI"),
+    data= ee.FeatureCollection("projects/kopecnyjan/assets/Training_pint_fix");
+//___________________________________________________Tuning the code -> Run certain parts of it__________________________________________________________
+
+
+
+var loadImagecollection=true
+var displayImagecollection=false
+
+var displayComposites=false
+
+var compositeTrick=true // GUESS CHANGE THE NAME
+var runClassification=true
+var runExportdata=false // the code block missing 
+//________________________________________________________________________________________________________________________________
+  
+//________________________________________________________________________________________________________________________________
+//                                                    setings : 
+//_________________________________________________________________________________________________________________________________
+
+var point=ee.Geometry.Point(38.3317876667455,-3.4533616115629027);
+var date =('2008-01-01', '2008-12-31'); 
+//var year= 2008;    
+var DrySeason1=[12,01,03,31]; // Month,Day,Month,Day Dec 1 to Mar 31 
+var DrySeason2=[6,01,10,31]; //June 1 to Oct 31
+var collection1='LANDSAT/LE07/C02/T1_L2'
+var cloudThreshold = 0.01;  
+// Import Land-Trender module 
+//var ltgee = require('users/emaprlab/public:Modules/LandTrendr.js');
+
+//________________________________________________________________________________________________________________________________
+//                                                    functions:   
+//_________________________________________________________________________________________________________________________________
+
+// Apply buffer to the Taita 
+var bufferDistance = 2000;
+var Taita_AOI = Taita.map(function(feature) {
+  return feature.buffer(bufferDistance);
+});
+//Map.addLayer(Taita, {}, 'AOI',false);
+
+//var aoiGeom = Taita_AOI.first().geometry();
+
+
+// scaling function 
+function applyScaleFactors(image) {
+  // Scale the optical bands: selects any band starting with 'SR_B'
+  var opticalBands = image.select('SR_B.').multiply(0.0000275).add(-0.2);
+  // Scale the thermal band ('ST_B')
+  var thermalBand = image.select('ST_B.*').multiply(0.00341802).add(149.0);
+  // Overwrite the original bands with the scaled versions
+  return image.addBands(opticalBands, null, true)
+              .addBands(thermalBand, null, true);
+}
+
+// Extract collection from given dates 
+function getCollection (year,collection) {
+  var year1 = year-1;
+  var year2 = year ;
+  var year3 = year+1;
+  var start1=ee.Date.fromYMD(year1,DrySeason1[0],DrySeason1[1]);//
+  var finish1= ee.Date.fromYMD(year2,DrySeason1[2],DrySeason1[3]);
+  var start2=ee.Date.fromYMD(year2,DrySeason2[0],DrySeason2[1]);//
+  var finish2=ee.Date.fromYMD(year2,DrySeason2[2],DrySeason2[3]);
+  var start3=ee.Date.fromYMD(year2,DrySeason1[0],DrySeason1[1]);//
+  var finish3=ee.Date.fromYMD(year3,DrySeason1[2],DrySeason1[3]);
+  var start4=ee.Date.fromYMD(year3,DrySeason2[0],DrySeason2[1]);//
+  var finish4=ee.Date.fromYMD(year3,DrySeason2[2],DrySeason2[3]);
+  
+  var collection1 = ee.ImageCollection(collection)
+    .filterBounds(point)
+    .filterDate(start1, finish1)
+    .sort('CLOUD_COVER', true)
+    .map(applyScaleFactors);  
+  var collection2 = ee.ImageCollection(collection)
+    .filterBounds(point)
+    .filterDate(start2, finish2)
+    .sort('CLOUD_COVER', true)
+    .map(applyScaleFactors); 
+  var collection3 = ee.ImageCollection(collection)
+    .filterBounds(point)
+    .filterDate(start3, finish3)
+    .sort('CLOUD_COVER', true)
+    .map(applyScaleFactors);  
+  var collection4 = ee.ImageCollection(collection)
+    .filterBounds(point)
+    .filterDate(start4, finish4)
+    .sort('CLOUD_COVER', true)
+    .map(applyScaleFactors); 
+  // megreg the collections: 
+  var Merged=collection1  
+    .merge(collection2)
+    .merge(collection3)
+    .merge(collection4);
+    
+  return Merged;
+}
+
+function getClouds2(image) {
+  var qa = image.select('QA_PIXEL');
+  
+  var qaMask = qa.bitwiseAnd(parseInt('11111', 2)).eq(0);
+  var saturationClear = image.select('QA_RADSAT').eq(0);
+  var cloudFlag = qa.bitwiseAnd(1 << 3).neq(0);
+  //var cirrusFlag = qa.bitwiseAnd(1 << 6).neq(0);
+  
+  var cloudConfidence = qa.rightShift(8).bitwiseAnd(3).gte(2); 
+  var shadowConfidence = qa.rightShift(10).bitwiseAnd(3).gte(2);
+  
+  var problematic = cloudFlag.or(cloudConfidence).or(shadowConfidence)//.or(cirrusFlag);
+  var clearMask = qaMask.and(saturationClear).and(problematic.not());
+  // adds a buffer 
+  var buffer = 5;
+  var dilatedMask = clearMask.focal_min({
+    radius: buffer, 
+    kernel: ee.Kernel.square(buffer), 
+    iterations: 1
+  });
+  
+  return image.updateMask(dilatedMask);
+}
+
+// masking of cirrus clouds  
+function maskIce(image) {
+  // Select the QA_PIXEL band 
+  var qa = image.select('QA_PIXEL');
+  var snowFlag = qa.bitwiseAnd(1 << 5).neq(0);
+  var clearMask = snowFlag.not();
+  return image.updateMask(clearMask);
+}
+
+// fraction computed from just QA_cloud positve pixels
+function getCloudMask (image) {
+  var qa = image.select('QA_PIXEL');
+  // Landsat 7: bit 3 indicates cloud
+  var cloudBitMask = 1 << 3; // << create binary mask binarymask = 1000 
+  // Binary cloud mask: 1 for cloud, 0 for clear.
+    var cloudMask = qa.bitwiseAnd(cloudBitMask).neq(0);// compare clodBitMask bit to the pixel QA vit value
+  return cloudMask; 
+} 
+ 
+ //_____________________________________________________________cloud fraction_____________________________________________________________
+function getCloudFraction(image){
+  
+  var cloudMask= getCloudMask(image); // call CloudMask function 
+  
+  // Compute the number of CLOUD pixels in the geometry -> dict 
+  var cloudStats = cloudMask.reduceRegion({ 
+    reducer: ee.Reducer.sum(), // sum the values of the cloudMask layer 
+    geometry: Taita_AOI, // area of interest params 
+    scale: 30, // resolution 
+    maxPixels: 1e9 // limit 
+  });
+  
+  // A total amount of pixels in the cliped image 
+  var totalStats = image.select(0).reduceRegion({
+    reducer: ee.Reducer.count(),
+    geometry: Taita_AOI,
+    scale: 30,
+    maxPixels: 1e9
+  });
+  
+  var cloudPixels = ee.Number(cloudStats.get(cloudMask.bandNames().get(0))); // get the sum oc Cloud pixels from the cloudStats dict
+  var totalPixels = ee.Number(totalStats.get(image.select(0).bandNames().get(0))); // sum of all pixies 
+  
+  // Cloaud fraction calculation 
+  var cloudFraction = ee.Algorithms.If(totalPixels.gt(0), // dont devide by 0 
+                                       cloudPixels.divide(totalPixels), // 
+                                       0);
+  
+  // Set the computed cloud fraction as a property on the image
+  return image.set('cloud_fraction', cloudFraction);
+}
+
+
+
+
+
+//__________________________________________________________________________________________________________________________________________
+//                      spectral functions: NDVI, EVI, TGC, TCW 
+//                      calculate all indicies for Landsat 5-7,L8-9 and L2  
+//___________________________________________________________________________________________________________________________________________
+
+// _____________________________________________________Landsat 7 -5 
+function indices_LS7(image) {
+  var ndvi = image.normalizedDifference(['SR_B4', 'SR_B3']).rename('NDVI');
+
+  var evi = image.expression(
+    '2.5 * ((b4 - b3) / (b4 + 6 * b3 - 7.5 * b1 + 1))',
+    {
+      b4: image.select('SR_B4'),
+      b3: image.select('SR_B3'),
+      b1: image.select('SR_B1')
+    }
+  ).rename('EVI');
+  
+   
+  var sipi= image.expression(
+    '(nir - blue)/(nir-red)',
+    {
+      blue: image.select('SR_B1'),
+      green: image.select('SR_B2'),
+      red: image.select('SR_B3'),
+      nir: image.select('SR_B4'),
+    }
+  ). rename('SIPI')
+
+  var tcg = image.expression(
+    '-0.2848 * blue - 0.2435 * green - 0.5436 * red + 0.7243 * nir + 0.0840 * swir1 - 0.1800 * swir2',
+    {
+      blue: image.select('SR_B1'),
+      green: image.select('SR_B2'),
+      red: image.select('SR_B3'),
+      nir: image.select('SR_B4'),
+      swir1: image.select('SR_B5'),
+      swir2: image.select('SR_B7')
+    }
+  ).rename('TCG');
+
+  var tcw = image.expression(
+    '0.1509 * blue + 0.1973 * green + 0.3279 * red + 0.3406 * nir - 0.7112 * swir1 - 0.4572 * swir2',
+    {
+      blue: image.select('SR_B1'),
+      green: image.select('SR_B2'),
+      red: image.select('SR_B3'),
+      nir: image.select('SR_B4'),
+      swir1: image.select('SR_B5'),
+      swir2: image.select('SR_B7')
+    }
+  ).rename('TCW');
+
+  return image.addBands([ndvi, evi, tcg, tcw, sipi]);
+}
+
+// __________________________________________________________Landsat 8
+function indices_LS8(image) {
+  var ndvi = image.normalizedDifference(['SR_B5', 'SR_B4']).rename('NDVI');
+
+  var evi = image.expression(
+      '2.5 * ((nir - red) / (nir + 6*red - 7.5*blue + 1))',
+      {
+        nir:  image.select('SR_B5'),
+        red:  image.select('SR_B4'),
+        blue: image.select('SR_B2')
+      }
+  ).rename('EVI');
+  
+  
+  var sipi= image.expression(
+    '(nir - blue)/(nir-red)',
+    {
+      blue: image.select('SR_B2'),
+      green: image.select('SR_B3'),
+      red:   image.select('SR_B4'),
+      nir:  image.select('SR_B5'),
+    }  
+  ).rename('SIPI')
+  
+// TCG  and TCW formula  Baig et al. (2014)  https://doi.org/10.1080/2150704X.2014.915434  for LS8
+  var tcg = image.expression(
+      '-0.2941*blue - 0.2430*green - 0.5424*red + 0.7276*nir + 0.0713*swir1 - 0.1608*swir2',
+      {
+        blue: image.select('SR_B2'),
+        green: image.select('SR_B3'),
+        red:   image.select('SR_B4'),
+        nir:   image.select('SR_B5'),
+        swir1: image.select('SR_B6'),
+        swir2: image.select('SR_B7')
+      }
+  ).rename('TCG');
+
+  var tcw = image.expression(
+      '0.1511*blue + 0.1973*green + 0.3283*red + 0.3407*nir - 0.7117*swir1 - 0.4559*swir2',
+      {
+        blue: image.select('SR_B2'),
+        green:image.select('SR_B3'),
+        red:  image.select('SR_B4'),
+        nir:  image.select('SR_B5'),
+        swir1:image.select('SR_B6'),
+        swir2:image.select('SR_B7')
+      }
+  ).rename('TCW');
+
+  return image.addBands([ndvi, evi, tcg, tcw, sipi]);
+}
+
+// ______________________________________________________________Landsat 2 MSS
+function indices_LS2(image) {
+  var ndvi = image.normalizedDifference(['30','20']).rename('NDVI');
+  var evi2 = image.expression(
+      '2.5 * (nir - red) / (nir + 2.4*red + 1)',
+      {
+        nir: image.select('30'),
+        red: image.select('20')
+      }
+  ).rename('EVI2');
+
+  return image.addBands([ndvi, evi2]);
+}
+
+// Indicias on GLS 1975 surface reflectance data data 
+function indices_LS2_sr(image) {
+  // NDVI = (NIR − RED) / (NIR + RED)
+  var ndvi = image
+    .normalizedDifference(['SR_B3', 'SR_B2'])
+    .rename('NDVI');
+  
+  // EVI2 = 2.5 * (NIR − RED) / (NIR + 2.4 * RED + 1)
+  var evi2 = image.expression(
+    '2.5 * (nir - red) / (nir + 2.4 * red + 1)', {
+      nir: image.select('SR_B3'),
+      red: image.select('SR_B2')
+    }
+  ).rename('EVI2');
+
+  return image.addBands([ndvi, evi2]);
+}
+
+// average NDVI value image 
+function getMeanNDVI(image) {
+  // Assumes 'NDVI' band already exists in the image
+  var meanNDVI = image.select('NDVI')
+                      .reduceRegion({
+                        reducer: ee.Reducer.mean(),
+                        geometry: Taita_AOI,  // or use image.geometry() if needed
+                        scale: 30,
+                        maxPixels: 1e13
+                      })
+                      .get('NDVI');
+  return image.set('meanNDVI', meanNDVI);
+}
+
+//________________________________________________________________________________________________________________________________
+//                                                    vizualisation parameters   
+//_________________________________________________________________________________________________________________________________
+var vizParams = {bands: ['SR_B3','SR_B2','SR_B1'], min: 0.0, max: 0.3};
+var vizParamsQ1 = {bands: ['SR_B3_p25','SR_B2_p25','SR_B1_p25'], min: 0.0, max: 0.3}; // set params for quartiles 
+var vizParamsQ2 = {bands: ['SR_B3_p75','SR_B2_p75','SR_B1_p75'], min: 0.0, max: 0.3};
+var vizParamsNDVI = {bands: ['NDVI'], min: 0.0, max: 0.3, palette:['white','green']};
+
+var vizParamsSIPI = {bands: ['SIPI'], min:0.0,max: 2.0, palette:['white','orange']};
+
+var vizParamsL8 = { // Landsat 8 and 9 
+  bands: ['SR_B4', 'SR_B3', 'SR_B2'],
+  min: 0.0,
+  max: 0.3,
+};
+
+// Landsat Global Land Survey 1975 viz params 
+var falseColor = {
+  gamma: 2.2,
+};
+
+// TOA reflectance LS 2  
+var visTOA = {
+  bands: ['10','B3','B2'],   // NIR, Red, Green
+  min:   0.0,                // 0% reflectance
+  max:   0.3,                // 30% reflectance
+  gamma: 1.4
+};
+
+//____________________________________________________________________________________________________________________
+//                                                    Image collection 
+//                              imports selected GLS 1975 Landsat images (MSS) and TOA products 
+//                          DN to TOA: https://yceo.yale.edu/how-convert-landsat-dns-top-atmosphere-toa-reflectance
+//                          than TOA -> SR by"Normalised Dark Object Reflectance Substraction" 
+//______________________________________________________________________________________________________________________
+//                                        Import LS2 MSS images 
+//                                      DN to TOA trasnformation + ATM 
+//______________________________________________________________________________________________________________________
+var raw = ee.Image('LANDSAT/GLS1975/p179r063_2x19750727');
+print(raw)
+// 1) Select the actual numeric bands [10,20,30,40]
+var mss = raw.select(['10','20','30','40']);
+
+// 2) DN → at-sensor radiance: L = gain·DN + bias
+var radiance = mss
+  .multiply(ee.Image.constant([
+    raw.getNumber('GAIN_BAND1'),
+    raw.getNumber('GAIN_BAND2'),
+    raw.getNumber('GAIN_BAND3'),
+    raw.getNumber('GAIN_BAND4')
+  ]))
+  .add(ee.Image.constant([
+    raw.getNumber('BIAS_BAND1'),
+    raw.getNumber('BIAS_BAND2'),
+    raw.getNumber('BIAS_BAND3'),
+    raw.getNumber('BIAS_BAND4')
+  ]));
+
+// 3) Earth–sun distance (AU) from acquisition date
+var date = ee.Date(raw.get('system:time_start'));
+var doy  = date.getRelative('day', 'year').add(1);
+var d = ee.Number(1)
+  .subtract(
+    ee.Number(0.01672)
+      .multiply(
+        doy.subtract(4)
+           .multiply(2 * Math.PI / 365)
+           .cos()
+      )
+  );
+
+// Sun elevation → radians, then compute cos(zenith)
+var sunElRad = ee.Number(raw.get('SUN_ELEVATION')).multiply(Math.PI/180);
+var cosZenith = sunElRad.cos();
+
+// Exo-atmospheric solar irradiance for MSS [band10,20,30,40]
+//    
+var ESUN = ee.Image.constant([1848, 1588, 1235, 856.6]);// USGS Level 1 product 
+
+// Radiance -> TOA reflectance: ρ = π*L*d² ÷ (ESUN*cosθₛ) <- missing the reflectance multibandfor USGS procedure 
+var toa = radiance
+  .multiply(ee.Image.constant(Math.PI).multiply(ee.Image.constant(d.pow(2))))
+  .divide(ESUN.multiply(ee.Image.constant(cosZenith)));
+
+Map.addLayer(
+  toa,
+  { bands: ['30','20','10'], min: 0, max: 0.2 },
+  'TOA Reflectance (GLS1975)'
+,false);
+print('toa',toa)
+
+// Atmospheric corection using DOS  
+var dark = toa.reduceRegion({
+  reducer: ee.Reducer.percentile([0.0001]),        // 1st percentile
+  geometry: raw.geometry(),                  // use the mosaic 
+  scale: 60,                                  // MSS resolution
+  maxPixels: 1e9
+});
+
+var darkOffsets = ee.Image.constant([
+  dark.getNumber('10'),
+  dark.getNumber('20'),
+  dark.getNumber('30'),
+  dark.getNumber('40'),
+]).rename(['10','20','30','40']);
+
+print('dark',dark)
+var sr = toa.subtract(darkOffsets);   // clamp negatives to zero
+
+/*
+Map.addLayer(
+  sr,
+  { bands: ['30','20','10'], min: 0, max: 0.15 },
+  'Surface Reflectance (DOS)'
+);
+print('SF' ,sr );
+*/
+// _________________________________________________________________________________________________________________
+var image1975= indices_LS2(sr) // call the indicies function 
+      .set('SPACECRAFT_ID','Landsat2')
+      .clip(Taita_AOI);
+// ______________________________________________________________________________________________________________________________________
+//                                              REST OF THE IMAGES 
+// ______________________________________________________________________________________________________________________________________
+if (loadImagecollection===true){
+// 1987 LS5
+var raw1987 = ee.Image('LANDSAT/LT05/C02/T1_L2/LT05_167062_19870218');
+var image1987 = indices_LS7(
+    getClouds2(applyScaleFactors(raw1987))
+  )
+  .clip(Taita_AOI);
+
+// 1995 LS5
+var raw1995 = ee.Image('LANDSAT/LT05/C02/T1_L2/LT05_167062_19950123');
+var image1995 = indices_LS7(
+    getClouds2(applyScaleFactors(raw1995))
+  )
+  .clip(Taita_AOI);
+
+// 2000 LS7
+var raw2000 = ee.Image('LANDSAT/LE07/C02/T1_L2/LE07_167062_20000129');
+var image2000 = indices_LS7(
+    getClouds2(applyScaleFactors(raw2000))
+  )
+  .clip(Taita_AOI);
+
+// 2015 LS8
+var raw2015 = ee.Image('LANDSAT/LC08/C02/T1_L2/LC08_167062_20150130');
+var image2015 = indices_LS8(
+    getClouds2(applyScaleFactors(raw2015))
+  )
+  .clip(Taita_AOI);
+// 2023 LS8
+var raw2023 = ee.Image('LANDSAT/LC08/C02/T1_L2/LC08_167062_20230205');
+var image2023 = indices_LS8(
+    getClouds2(applyScaleFactors(raw2023))
+  )
+  .clip(Taita_AOI);
+
+// All single images 
+var images = ee.ImageCollection.fromImages([
+  //image1975.set('year', 1975),
+  image1987.set('year', 1987)
+    .set('image_type', 'image'),
+  image1995 .set('year', 1995)
+  .set('image_type', 'image'),
+  image2000 .set('year', 2000)
+  .set('image_type', 'image'),
+  image2015 .set('year', 2015)
+  .set('image_type', 'image'),
+  image2023 .set('year', 2023)
+  .set('image_type', 'image'),
+]);
+
+print('single images', images);
+}
+// ___________________________________________________________________________________________________________________________________________________
+                                         // Display single mages etc.
+if (displayImagecollection===true) {
+//1975 
+Map.addLayer(
+  image1975,
+  { bands: ['30','20','10'], min: 0, max: 0.15 },
+  'image1975 sf',false 
+);
+//1987
+Map.addLayer(image1987, vizParams, '1987 LS5',false);
+Map.addLayer(image1987,vizParamsNDVI,'1987 NDVI',false);
+Map.addLayer(image1987,vizParamsSIPI,'1987 SIPI',false);
+// 1995 
+Map.addLayer(image1995, vizParams, '1995 LS5',false);
+Map.addLayer(image1995,vizParamsNDVI,'1995 NDVI',false);
+// 2000
+Map.addLayer(image2000, vizParams, '2000 LS7',false );
+Map.addLayer(image2000,vizParamsNDVI,'2000 NDVI',false);
+Map.addLayer(image2000,vizParamsSIPI,'2000 SIPI',false);
+// 2015     
+Map.addLayer(image2015, vizParamsL8, '2015 LS8',false);
+Map.addLayer(image2015,vizParamsNDVI,'2015 NDVI',false);
+//2023
+Map.addLayer(image2023, vizParamsL8, '2023 LS8',false);
+Map.addLayer(image2023,vizParamsNDVI,'2015 NDVI',false);
+}
+
+
+//________________________________________________________________________________________________________________________________
+//                                    // Dry season composites: image collections to deal twith SLC-off era 
+                                      // get images of dry season from two consecutive years 
+                                      // takes two least cloudy images 
+                                      // creates a median composite of these 2 images 
+//_________________________________________________________________________________________________________________________________
+
+//_________________________________________________________________________________________________________________________________
+// Min-max scaling to [0, 1] for each band per image
+/*
+function minMaxScale(img) {
+  var bandNames = img.bandNames();
+
+  var minDict = img.reduceRegion({
+    reducer: ee.Reducer.min(),
+    geometry: Taita_AOI,
+    scale: 30,
+    maxPixels: 1e9
+  });
+
+  var maxDict = img.reduceRegion({
+    reducer: ee.Reducer.max(),
+    geometry: Taita_AOI,
+    scale: 30,
+    maxPixels: 1e9
+  });
+
+    // Extract values in correct order from dicts
+  var minList = bandNames.map(function(name) { return ee.Number(minDict.get(name)); });
+  var maxList = bandNames.map(function(name) { return ee.Number(maxDict.get(name)); });
+
+  // Create constant images
+  var min = ee.Image.constant(minList).rename(bandNames);
+  var max = ee.Image.constant(maxList).rename(bandNames);
+
+  var scaled = img.subtract(min).divide(max.subtract(min));
+  return scaled
+    .set('system:time_start', img.get('system:time_start'))
+    .copyProperties(img);
+}
+*/
+//_________________________________________________________________________________________________________________________________
+
+
+function buildDryComposite(year, cloudThreshold) {
+  // Get the four dry‐season windows around defined year 
+  var col = getCollection(year, collection1)
+    .map(function(img) { return img.clip(Taita_AOI); })
+    .map(getCloudFraction)
+    .filter(ee.Filter.lt('cloud_fraction', cloudThreshold))
+    .sort('cloud_fraction', true)
+    .map(getClouds2)
+    // .map(getNDVI)            
+    .map(indices_LS7); // call the indicies function 
+
+  // Turn into a list and grab the two best images (cloudfraction- vise)
+  var sortedList = col.toList(2);
+  var img1 = ee.Image(sortedList.get(0));
+  var img2 = ee.Image(sortedList.get(1));
+  
+  // Scale both images
+  //var img1_scaled = minMaxScale(img1)
+  //var img2_scaled = minMaxScale(img2)
+
+  // create a median composite 
+  var composite = ee.ImageCollection([img1, img2]).median();
+
+  // get the metadata from the images 
+  var timeStart = img1.get('system:time_start');
+  var spacecraftID= img1.get('SPACECRAFT_ID');
+  var lsProductID1=img1.get('L1_LANDSAT_PRODUCT_ID');
+  var lsProductID2=img2.get('L1_LANDSAT_PRODUCT_ID');
+  var imageType= 'composite';
+  var year1=ee.String(img1.get('DATE_ACQUIRED'));  
+  var year2= ee.String(img2.get('DATE_ACQUIRED'));
+  var code='cc'+year 
+  
+  
+  // add metadata to the composite 
+  composite = composite
+    .set('image_type', imageType)
+    .set('system:time_start', timeStart)
+    .set('year', ee.Number.parse(year1.slice(0, 4))) // attach yaar of the images 
+    .set('year2',ee.Number.parse(year1.slice(0, 4)))
+    .set('SPACECRAFT_ID',spacecraftID)
+    .set('L1_LANDSAT_PRODUCT_ID_1',lsProductID1)
+    .set('L1_LANDSAT_PRODUCT_ID_2',lsProductID2);
+    
+  img1 = getMeanNDVI(img1)
+    .set('image_type', imageType)
+    .set('system:time_start', timeStart)
+    .set('year', ee.Number.parse(year1.slice(0, 4))) // attach yaar of the images 
+    //.set('year2',ee.Number.parse(year1.slice(0, 4)))
+    .set('SPACECRAFT_ID',spacecraftID)
+    .set('L1_LANDSAT_PRODUCT_ID_1',lsProductID1)
+    .set('L1_LANDSAT_PRODUCT_ID_2',lsProductID2);
+    //.set('code',code);
+  img2= getMeanNDVI(img2)
+    .set('image_type', imageType)
+    .set('system:time_start', timeStart)
+    .set('year', ee.Number.parse(year2.slice(0, 4))) // attach yaar of the images 
+    //.set('year2',ee.Number.parse(year1.slice(0, 4)))
+    .set('SPACECRAFT_ID',spacecraftID)
+    .set('L1_LANDSAT_PRODUCT_ID_1',lsProductID1)
+    .set('L1_LANDSAT_PRODUCT_ID_2',lsProductID2);
+    //.set('code',year );
+  //label 
+  var label = year + '-' + (year + 1);
+
+  
+  //print('Composite for ' + label, composite);
+  //print('image1'+ year ,img1)
+  //print('image2'+ year,img2)
+  
+ var year_1= img1.get('year').getInfo();
+ var year_2= img2.get('year').getInfo();
+  // Add the composite to the map
+  if (displayComposites===true){
+  
+  Map.addLayer(
+    img1,
+    vizParamsNDVI,
+    'NDVI ' + year_1,
+    false
+  );
+  
+  Map.addLayer(
+    img1,
+    vizParams,
+    'RGB '  + year_1,
+    false
+  );
+  
+  Map.addLayer(
+    img2,
+    vizParamsNDVI,
+    'NDVI ' + year_2,
+    false
+  );
+  
+  Map.addLayer(
+    img2,
+    vizParams,
+    'RGB '  + year_2,
+    false
+  );
+
+  
+}
+ return ee.List([img1,img2]);
+      
+}
+
+// loop over the list and extract the composites 
+var compositeList = [];
+var dryimageList=[];
+var years = [2002, 2005, 2007, 2008, 2009, 2011]; //years for composite images
+/*
+years.forEach(function(year) {
+  var comp = buildDryComposite(year, cloudThreshold);
+  compositeList.push(comp);
+});
+*/
+
+var dryImageList = ee.List([]); // turn in to a ee.list 
+
+years.forEach(function(year) {
+  var imagePair = buildDryComposite(year, cloudThreshold);  // returns ee.List of 2 images
+  dryImageList = dryImageList.cat(imagePair);               // concatenate to main list
+});
+
+//  ee.Image objects into a single ImageCollection
+//var drySeries = ee.ImageCollection(compositeList);
+//print('Dry‐season composites collection:', drySeries);
+
+// Add the images to the 
+var dryimages = ee.ImageCollection(dryImageList);
+print('Dry‐season composites collection:', dryimages);
+
+if(loadImagecollection===true){ 
+
+var allImages= images.merge(dryimages)
+    .sort('year', true); // sort by the year 1987 to 2023 
+    
+print('allImages',allImages);
+}
+
+
+// convert to a dictionary for mapping 
+//___________________________________________________________________________________________________________________________
+
+  
+  
+  
+
+ 
+
+
+//______________________________________________________________________________________________________________________________
+//                                  // reclass the training data + sample split  
+//_________________________________________________________________________________________________________________________________
+
+// re-group the training data: 
+//    1=Forest, 2=Bush/Shrub, 3=Grassland/Cropland, 4=Barren, 5=Others
+//_________________________________________________________________
+
+// reclasifie the training data labels: 
+var validRaw = [1, 4, 5, 6, 8, 13]; // choose classes (do not use errors zeros values etc.)
+
+var qPoints = data.filter(ee.Filter.inList('class5',validRaw)); // filer data base on the previous step   
+var bands_L5 = ['SR_B1','SR_B2','SR_B3','SR_B4','SR_B5','SR_B7','NDVI','EVI','SIPI']; // choose  "bands" to 
+var bands_L8= ['SR_B2', 'SR_B3', 'SR_B4', 'SR_B5','SR_B6', 'SR_B7','NDVI', 'EVI','SIPI']; 
+var bands_L7 = ['SR_B1','SR_B2','SR_B3','SR_B4','SR_B5','SR_B7','NDVI','EVI','SIPI'];
+var bands_L2 = ['10','20','30','40','NDVI']; 
+
+
+// _________________________________________________________________________________________________________________________
+//                                      Loop classification 
+//                          The training data are two sets : 2023 -> needs reclysifiing 
+//                          Data 1987 to 2015 - already class6 format -> dont need reclasifiing
+//                          1=Forest, 2=Bush/Shrub, 3=Grassland/Cropland, 4=Barren, 5=Others
+// _________________________________________________________________________________________________________________________
+
+// ALL IMAGES NEEDS TO BE SORETED BY YEAR  
+
+// create a collection of training data? 
+
+// Classification vis pallete 
+var palette6 = [
+    '#006400', // 1 Forest
+    '#8B4513', // 2 Thicket
+    '#8a9b7e', // 3 Shrub  #d2b578
+    '#f7b869', // 4 Grassland
+    // '#ADFF2F', // 5 Cropland
+    '#8c7b6b'  // 6 Barren
+    ];
+
+// Helper for class labeling 
+var nameMap= ee.Dictionary({
+  '1': 'Forest',
+  '2': 'Thicket',
+  '3': 'Shrub',
+  '4': 'Grassland',
+  '5': 'Barren'
+});
+
+
+// function to re- lable the classes 
+function reclass(f) {
+  var raw    = ee.String(f.get('class6'));
+  var label  = nameMap.get(raw);
+  return f.set('class6_name', label);
+}
+//____________________________________________________________________
+// Ling the training data tables to the years 
+var yearTableDict = ee.Dictionary({
+  '1987': table,
+  '1995': table2,
+  '2000': table3,
+  '2002': table4,  //do not need compposite 
+  '2005': table5, //same year composite  
+  '2007': table6,
+  '2008': table7,
+  '2009': table8,
+  '2010': table8,
+  '2011': table9,
+  '2012': table9,
+  '2015': table10,
+  '2023': table11,
+});
+
+var bandDict = ee.Dictionary({
+  'LANDSAT_2': bands_L2,
+  'LANDSAT_5': bands_L5,
+  'LANDSAT_7': bands_L7,
+  'LANDSAT_8': bands_L8
+});
+
+// function, returns a a classified image dictionary + meanNDVI for sorting mosaics 
+function classification(img) {
+  img = ee.Image(img);
+  var year     = ee.Number(img.get('year'));
+  var yearKey  = year.format('%d');
+  var imageType= ee.String(img.get('image_type')); 
+  var sensor   = ee.String(img.get('SPACECRAFT_ID'));
+  var data     = ee.FeatureCollection(yearTableDict.get(yearKey));
+
+  var bands = ee.List(
+    ee.Algorithms.If(sensor.equals('LANDSAT_2'), bands_L2,
+    ee.Algorithms.If(sensor.equals('LANDSAT_5'), bands_L5,
+    ee.Algorithms.If(sensor.equals('LANDSAT_7'), bands_L7,
+    ee.Algorithms.If(sensor.equals('LANDSAT_8'), bands_L8,
+                     bands_L5 ))))
+  );
+
+  // Sample, train, classify…
+  var Points    = data.map(reclass);
+  var samples   = img.select(bands).sampleRegions({
+    collection: Points,
+    properties: ['class6'],
+    scale: 60,
+    geometries: true
+  });
+  var withRand  = samples.randomColumn('rand', 42);
+  var trainSet  = withRand.filter(ee.Filter.lt('rand', 0.7));
+  var classifier= ee.Classifier.smileRandomForest(50)
+                         .train({
+                            features:   trainSet,
+                            classProperty: 'class6',
+                            inputProperties: bands
+                          });
+  var classified = img.select(bands).classify(classifier);
+
+  // Compute mean NDVI for metadata
+  var meanNDVI = img.select('NDVI')
+                    .reduceRegion({
+                      reducer: ee.Reducer.mean(),
+                      geometry: Taita_AOI,
+                      scale: 30,
+                      maxPixels: 1e9
+                    })
+                    .get('NDVI');
+
+  // *** SIMPLIFIED RETURN: just the classified image with properties ***
+  return classified.set({
+    'year':      year,
+    'meanNDVI':  meanNDVI,
+    'image_type': imageType
+  });
+}
+
+
+
+
+// Create  ee.List 
+var imageList = allImages.toList(allImages.size()); 
+// ran the classification function on the List of images
+var classifiedCollection = ee.ImageCollection(
+          allImages.map(classification));
+
+var imgList = classifiedCollection.toList(classifiedCollection.size());
+
+/*
+var count = classifiedCollection.size().getInfo();
+
+for (var i = 0; i < count; i++) {
+  var img = ee.Image(imgList.get(i));
+  // grab the year metadata client-side for labeling
+  var year = img.get('year').getInfo();
+  
+  Map.addLayer(
+    img,
+    { min: 1, max: 5, palette: palette6 },
+    'Classification ' + year
+  );
+}
+*/
+//________________________________________________________________________________________________
+// index grabing the pairs for mosaicing 
+
+var singleimages= classifiedCollection // single images to show 
+    .filter(ee.Filter.gte('year', 2012)) // eg. 2023 etc
+   .filter(ee.Filter.lte('year', 2005)) // eg. under fakin 2005 
+  .sort('year');
+print('single images' ,singleimages)
+  
+var singleImageList= singleimages.toList(singleimages.size());
+
+for (var i = 0; i < count; i++) {
+  var img = ee.Image(singleImageList.get(i));
+  // grab the year metadata client-side for labeling
+  var year = img.get('year').getInfo();
+  
+  Map.addLayer(
+    img,
+    { min: 1, max: 5, palette: palette6 },
+    'Classification ' + year
+  );
+}
+
+var filtered = classifiedCollection
+  .filter(ee.Filter.gte('year', 2005)) // >
+  .filter(ee.Filter.lte('year', 2012))
+  .sort('year');
+
+var mosaicList= filtered.toList(filtered.size());
+var count=mosaicList.size();
+
+var idxs = ee.List.sequence(0, count.subtract(2), 2);
+print('Pair start indices:', idxs);  
+
+
+
+
+var newmosaicList = idxs.map(function(i) {
+  i = ee.Number(i);
+  // Pull out image i and image i+1
+  var img1 = ee.Image(mosaicList.get(i));
+  var img2 = ee.Image(mosaicList.get(i.add(1)));
+  
+  // Decide which has lower meanNDVI → main vs fill
+  var ndvi1 = ee.Number(img1.get('meanNDVI'));
+  var ndvi2 = ee.Number(img2.get('meanNDVI'));
+  var main  = ee.Image(ee.Algorithms.If(ndvi1.lte(ndvi2), img1, img2));
+  var fill  = ee.Image(ee.Algorithms.If(ndvi1.lte(ndvi2), img2, img1));
+  
+  // Create the mosaic and carry forward the year
+  var mosaic = main.unmask(fill)
+                   .rename('classification')
+                   .set('year', main.get('year'));
+  
+  return mosaic;
+});
+
+// 5) OPTIONAL: turn into an ImageCollection and visualize
+var mosaicCol = ee.ImageCollection(newmosaicList);
+print('Mosaic collection:', mosaicCol);
+
+// (client-side) loop to add each mosaic with your palette6
+var years = mosaicCol.aggregate_array('year').getInfo();
+var n     = years.length;
+var list  = mosaicCol.toList(n);
+for (var j = 0; j < n; j++) {
+  var m   = ee.Image(list.get(j));
+  var yr  = years[j];
+  Map.addLayer(
+    m,
+    {min: 1, max: 5, palette: palette6},
+    'Mosaic ' + yr,
+    false
+  );
+}
