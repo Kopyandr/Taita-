@@ -1,3 +1,4 @@
+// This is a code written during master thesis at Helsinki University
 var table = ee.FeatureCollection("projects/kopecnyjan/assets/1987_filtered_geo"),
     table2 = ee.FeatureCollection("projects/kopecnyjan/assets/1995_filtered_geo"),
     table3 = ee.FeatureCollection("projects/kopecnyjan/assets/2000_filtered_geo"),
