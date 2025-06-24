@@ -1,0 +1,259 @@
+"""""
+
+CALC: 
+NDVI std foe each class in 2023 
+filters data deviating from the std range of 2023 in different years 
+
+ALTERNATIVLY:
+computes quartals -> IQR 
+move the IQR following sample mean 
+
+delets points outside the adjusted IQR in indicies/bands  NDVI, SIPI, SWIR1 
+points deleted after deviating from ANY of the 3 set intervals
+
+
+comoparable are TM, ETM, OLI -> problematic MSS (drop??) 
+
+
+_______________________________________________________________________________________________
+calculates 2023 std in NDVI and SIPI indexe -> delete past points that deviate from the interval in BOTH NNDVI and SIPI 
++ Ploting the result 
+_______________________________________________________________________________________________
+
+"""""
+
+import os
+import glob
+import pandas as pd
+import shutil
+import matplotlib.pyplot as plt
+import numpy as np 
+
+# Settings - adjust paths and column names as needed
+input_dirs = [
+ #r"C:\ajedes\Taita Hills\spectral signature\training data GEE_2_2-20250513T122357Z-1-001\training data GEE_2_2",
+    #r"C:\ajedes\Taita Hills\spectral signature\training data GEE_2-20250513T121038Z-1-001\training data GEE_2"
+r"training data GEE_4"
+]
+
+date_ref   = '2023' 
+ndvi_col   = 'NDVI' #prepared for chunking by gruby
+class_col  = 'class6'#prepared for chunking by gruby 
+output_dir =r"filtered\filtred_points_export" 
+#r"filtered\filterd_min_max"
+#r"C:\ajedes\Taita Hills\spectral signature\filtered\filter_test_delete_all"
+#C:\ajedes\Taita Hills\spectral signature\filtered\filtered_ndvi_sipis_swir"
+#comparing all classes  
+red='RED' 
+green= 'GREEN'
+blue= 'BLUE'
+nir= 'NIR'
+
+
+ # delete existing file/folder
+def delete_path_if_exists(path):
+    if os.path.exists(path):
+        if os.path.isfile(path) or os.path.islink(path):
+            os.remove(path)
+        else:
+            shutil.rmtree(path)
+
+# BUILD 2023 REFERENCE STATS
+df_ref_list = [] #iniciate the list
+for d in input_dirs: #itareate throug th input dih 
+    pattern = os.path.join(d, f"samples_*_{date_ref}.csv") #conects the dictionary d + "samples" for the glob function  
+    for fn in glob.glob(pattern): # open all files in the file with glob 
+        df_ref_list.append(pd.read_csv(fn)) # read the CVS to pandas dataframe 
+
+if not df_ref_list: # if df empty, rise an issue 
+    raise ValueError(f"No 2023 CSVs found! Looking for {pattern}")
+
+df_ref = pd.concat(df_ref_list, ignore_index=True) #concant to a single pd dataframe [] df_ref 
+
+# drop unwanted columns if present
+#for drop_col in ['system:index', '.geo', 'THERMAL']:
+#    if drop_col in df_ref.columns:
+#        df_ref.drop(drop_col, axis=1, inplace=True)
+# 
+   
+# Tasseled cap transformation for LS8 
+df_ref['SIPI'] = (df_ref[nir] - df_ref[blue]) / (df_ref[nir] - df_ref[red]) #calc SIPI for the current year # tasseld cap   
+df_ref['TCG']=0.1509 * df_ref['BLUE'] + 0.1973 * df_ref['GREEN'] + 0.3279 * df_ref['RED'] + 0.3406 * df_ref['NIR'] - 0.7112 * df_ref['SWIR1'] - 0.4572 * df_ref['SWIR2'] #Tasseld Cap greenes 
+df_ref['TCW']= 0.1511*df_ref['BLUE'] + 0.1973*df_ref['GREEN'] + 0.3283*df_ref['RED'] + 0.3407*df_ref['NIR'] - 0.7117*df_ref['SWIR1'] - 0.4559*df_ref['SWIR2'] # tasseld wetnesss 
+
+# compute mean & std per class
+stats_ref = {} #dict of stats 
+# cls -> current class code 
+for cls, subset in df_ref.groupby(class_col): # create datafreames with the same class (class_col=class6)
+    mean_ndvi = subset[ndvi_col].mean() # calculate meand of NDVI 
+    std_ndvi  = subset[ndvi_col].std() # standard deviation 
+    mean_sipi=subset['SIPI'].mean()
+    std_sipi=subset['SIPI'].std()
+    mean_swir1=subset['SWIR1'].mean()
+    std_swir1=subset['SWIR1'].std()
+    
+    #calculate variance
+    var_ndvi=subset['NDVI'].var()
+    var_sipi=subset['SIPI'].var()
+    var_swir1=subset['SWIR1'].var()
+    
+    #  interquartile range 
+    q25_ndvi=np.quantile(subset['NDVI'],0.05)
+    q75_ndvi=np.quantile(subset['NDVI'], 0.95)
+    q25_sipi=np.quantile(subset['SIPI'],0.05)
+    q75_sipi=np.quantile(subset['SIPI'],0.95)
+    q25_swir1=np.quantile(subset['SWIR1'],0.05)
+    q75_swir1=np.quantile(subset['SWIR1'], 0.95)
+    
+    #inter quartile range
+    IQR_ndvi= q75_ndvi - q25_ndvi
+    IQR_sipi= q75_sipi-q25_sipi
+    IQR_swir1= q75_swir1-q25_swir1
+    
+    stats_ref[cls] = {'mean_ndvi': mean_ndvi, 'std_ndvi': std_ndvi,
+                      'mean_sipi':mean_sipi,'std_sipi':std_sipi,
+                      'mean_swir1':mean_swir1, 'std_swir1':std_swir1,
+                      'var_ndvi':var_ndvi, 'var_sipi':var_sipi, 'var_swir1':var_swir1,
+                      'IQR_ndvi':IQR_ndvi,'IQR_sipi':IQR_sipi,'IQR_swir1':IQR_swir1}
+    
+     
+     
+    # giives df_ref={1: {'mean': 0.5451, 'std': 0.1234},
+    # }
+    
+kept_all = [] #keep the rows for the year 
+
+# PRINT OUT THE STD NDVI FOR EACH CLASS 
+cls_dict = {
+    '1': 'Forest',
+    '2': 'Thicket',
+    '3': 'Shrubland',
+    '4': 'Grassland',
+    '5': 'Barren land'
+}
+
+print("2023 reference NDVI standard deviations by class:")
+for cls, vals in stats_ref.items(): #return key,values e.g.  cls = {1,2,3,} vals= {'mean': 0.5451, 'std': 0.1234}
+    cls_name = cls_dict.get(str(cls), f"Class{cls}") #maps over names for printing 
+    print(f"  {cls_name:<12} (code {cls}): std NDVI = {vals['std_ndvi']:.4f}") 
+    
+
+#PER YEAR PER CLASS STATS
+stats_years={} #  { year: { class: { mean_ndvi, std_ndvi, mean_sipi, std_sipi, ... } } }
+
+
+#FILTER OTHER YEARS
+os.makedirs(output_dir, exist_ok=True) #make sure the path exist 
+
+for d in input_dirs: 
+    for fn in glob.glob(os.path.join(d, "samples_*.csv")): # find and open files with .glob 
+        # skip the reference files of 2023 or what ever year 
+        if fn.endswith(f"_{date_ref}.csv"):
+            continue
+
+        df = pd.read_csv(fn)  # load the file as df
+        stored_columns = {}  # dictionary to store dropped columns
+
+        for drop_col in ['system:index', '.geo', 'THERMAL']:  # specify columns to store
+            if drop_col in df.columns:
+                stored_columns[drop_col] = df[drop_col]  # store the column
+                df.drop(drop_col, axis=1, inplace=True)  # drop the column from the main DataFrame
+
+        # extract year  class from filename, e.g. samples_L7_2000.csv → year=2000
+        basename = os.path.basename(fn)
+        year = basename.rsplit("_", 1)[-1].replace(".csv", "")
+        prefix = basename.replace("samples_", "").replace(".csv", "")
+        
+        #Add indicies         
+        #df['SIPI'] = (df[nir] - df[blue]) / (df[nir] - df[red])
+
+        
+        if year == '2015': # Landsat 8 data  
+            df['TCG']=0.1509 * df['BLUE'] + 0.1973 * df['GREEN'] + 0.3279 * df['RED'] + 0.3406 * df['NIR'] - 0.7112 * df['SWIR1'] - 0.4572 * df['SWIR2'] #Tasseld Cap greenes 
+            df['TCW']= 0.1511*df['BLUE'] + 0.1973*df['GREEN'] + 0.3283*df['RED'] + 0.3407*df['NIR'] - 0.7117*df['SWIR1'] - 0.4559*df['SWIR2'] # tasseld wetnesss 
+            df['SIPI'] = (df[nir] - df[blue]) / (df[nir] - df[red])
+        elif year== '1975': 
+             print('no cap for MSS')
+             
+        else:  #LS 5 to  LS 7 
+           df['TCG']=  -0.2848 * df['BLUE'] - 0.2435 * df['GREEN'] - 0.5436 * df['RED'] + 0.7243 * df['NIR'] + 0.0840 * df['SWIR1'] - 0.1800 * df['SWIR2'] #TC greenes 
+           df['TCW']=   0.1509 * df['BLUE'] + 0.1973 * df['GREEN'] + 0.3279 * df['RED'] + 0.3406 * df['NIR'] - 0.7112 * df['SWIR1'] - 0.4572 * df['SWIR2'] #wetness
+           df['SIPI'] = (df[nir] - df[blue]) / (df[nir] - df[red])
+           
+        stats_years[year] = {}
+        for cls, subset in df.groupby(class_col): 
+            stats_years[year][cls] = {
+                'mean_ndvi':  subset[ndvi_col].mean(),
+                'std_ndvi':   subset[ndvi_col].std(),
+                'mean_sipi':  subset['SIPI'].mean(),
+                'std_sipi':   subset['SIPI'].std(),
+                'mean_swir1': subset['SWIR1'].mean(),
+                'std_swir1':  subset['SWIR1'].std(),
+                'var_ndvi':subset['NDVI'].var(),
+                'var_sipi':subset['SIPI'].var(),
+                'var_swir1':subset['SWIR1'].var(),
+                'IQR_ndvi':(np.quantile(subset['NDVI'],0.05))-(np.quantile(subset['NDVI'],0.95)),
+                'IQR_sipi': (np.quantile(subset['SIPI'],0.05))-(np.quantile(subset['SIPI'],0.95)),
+                'IQR_swir1':(np.quantile(subset['SWIR1'],0.05))-(np.quantile(subset['SWIR1'],0.95)),     
+            }
+            
+             
+        
+        # 0.1509 * blue + 0.1973 * green + 0.3279 * red + 0.3406 * nir - 0.7112 * swir1 - 0.4572 * swir2
+        
+        # filter each class
+        # Filter each class
+for cls, cls_ref in stats_ref.items():  # class + {mean, std, IQR}
+    cls_df = df[df[class_col] == int(cls)]  # Filter rows for the current class
+    if cls_df.empty:
+        continue
+
+    # Grab IQR thresholds for the reference year
+    ref_iqr_ndvi = stats_ref[cls]['IQR_ndvi']
+    ref_iqr_sipi = stats_ref[cls]['IQR_sipi']
+    ref_iqr_swir1 = stats_ref[cls]['IQR_swir1']
+
+    # Calculate IQR-based thresholds for the current year
+    year_mean_ndvi = stats_years[year][cls]['mean_ndvi']
+    year_mean_sipi = stats_years[year][cls]['mean_sipi']
+    year_mean_swir1 = stats_years[year][cls]['mean_swir1']
+
+    lower_q25_ndvi = year_mean_ndvi - ref_iqr_ndvi
+    upper_q75_ndvi = year_mean_ndvi + ref_iqr_ndvi
+    lower_q25_sipi = year_mean_sipi - ref_iqr_sipi
+    upper_q75_sipi = year_mean_sipi + ref_iqr_sipi
+    lower_q25_swir1 = year_mean_swir1 - ref_iqr_swir1
+    upper_q75_swir1 = year_mean_swir1 + ref_iqr_swir1
+
+    # Create masks for rows outside the IQR range
+    mask_out_ndvi = ~cls_df[ndvi_col].between(lower_q25_ndvi, upper_q75_ndvi)
+    mask_out_sipi = ~cls_df['SIPI'].between(lower_q25_sipi, upper_q75_sipi)
+    mask_out_swir1 = ~cls_df['SWIR1'].between(lower_q25_swir1, upper_q75_swir1)
+
+    # Combine masks: delete rows that fall outside any of the IQR ranges
+    mask_delete = mask_out_ndvi | mask_out_sipi | mask_out_swir1
+
+    # Debugging: Print how many rows are being filtered
+    print(f"Class {cls}: Filtering {mask_delete.sum()} rows out of {len(cls_df)}")
+
+    # Keep rows that are within the IQR range
+    kept = cls_df[~mask_delete]
+    kept_all.append(kept)
+
+# Combine all kept rows for the year
+if kept_all:
+    df_year = pd.concat(kept_all, ignore_index=True)
+
+    # Drop all columns that are not needed
+    columns_to_keep = ['system:index', 'class6', '.geo']  # Adjust as needed
+    df_year = df_year[[col for col in df_year.columns if col in columns_to_keep]]
+
+    # Reattach stored columns
+    for col_name, col_data in stored_columns.items():
+        df_year[col_name] = col_data[:len(df_year)]  # Reattach stored columns to the filtered DataFrame
+
+    # Save the filtered data
+    year_out = os.path.join(output_dir, f"{year}_filtered.csv")
+    delete_path_if_exists(year_out)
+    df_year.to_csv(year_out, index=False)
+    print(f"Saved {len(df_year)} total rows for year {year} into {year}_filtered.csv")
