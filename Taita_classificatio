@@ -555,39 +555,7 @@ Map.addLayer(image2023,vizParamsNDVI,'2015 NDVI',false);
 //_________________________________________________________________________________________________________________________________
 
 //_________________________________________________________________________________________________________________________________
-// Min-max scaling to [0, 1] for each band per image
-/*
-function minMaxScale(img) {
-  var bandNames = img.bandNames();
 
-  var minDict = img.reduceRegion({
-    reducer: ee.Reducer.min(),
-    geometry: Taita_AOI,
-    scale: 30,
-    maxPixels: 1e9
-  });
-
-  var maxDict = img.reduceRegion({
-    reducer: ee.Reducer.max(),
-    geometry: Taita_AOI,
-    scale: 30,
-    maxPixels: 1e9
-  });
-
-    // Extract values in correct order from dicts
-  var minList = bandNames.map(function(name) { return ee.Number(minDict.get(name)); });
-  var maxList = bandNames.map(function(name) { return ee.Number(maxDict.get(name)); });
-
-  // Create constant images
-  var min = ee.Image.constant(minList).rename(bandNames);
-  var max = ee.Image.constant(maxList).rename(bandNames);
-
-  var scaled = img.subtract(min).divide(max.subtract(min));
-  return scaled
-    .set('system:time_start', img.get('system:time_start'))
-    .copyProperties(img);
-}
-*/
 //_________________________________________________________________________________________________________________________________
 
 
@@ -879,8 +847,6 @@ function classification(img) {
 }
 
 
-
-
 // Create  ee.List 
 var imageList = allImages.toList(allImages.size()); 
 // ran the classification function on the List of images
@@ -889,30 +855,20 @@ var classifiedCollection = ee.ImageCollection(
 
 var imgList = classifiedCollection.toList(classifiedCollection.size());
 
-/*
-var count = classifiedCollection.size().getInfo();
 
-for (var i = 0; i < count; i++) {
-  var img = ee.Image(imgList.get(i));
-  // grab the year metadata client-side for labeling
-  var year = img.get('year').getInfo();
-  
-  Map.addLayer(
-    img,
-    { min: 1, max: 5, palette: palette6 },
-    'Classification ' + year
-  );
-}
-*/
 //________________________________________________________________________________________________
 // index grabing the pairs for mosaicing 
 
-var singleimages= classifiedCollection // single images to show 
-    .filter(ee.Filter.gte('year', 2012)) // eg. 2023 etc
-   .filter(ee.Filter.lte('year', 2005)) // eg. under fakin 2005 
-  .sort('year');
-print('single images' ,singleimages)
+var singleimages1= classifiedCollection // single images to show 
+    .filter(ee.Filter.gte('year', 2012));
+var singleimages2=classifiedCollection  
+    .filter(ee.Filter.lte('year', 2005));
+    
   
+var singleimages = singleimages1.merge(singleimages2)
+      .sort('year');
+print ('single images', singleimages);
+
 var singleImageList= singleimages.toList(singleimages.size());
 
 for (var i = 0; i < count; i++) {
@@ -928,8 +884,8 @@ for (var i = 0; i < count; i++) {
 }
 
 var filtered = classifiedCollection
-  .filter(ee.Filter.gte('year', 2005)) // >
-  .filter(ee.Filter.lte('year', 2012))
+  .filter(ee.Filter.gte('year', 2005)) 
+  .filter(ee.Filter.lte('year', 2012)) // 
   .sort('year');
 
 var mosaicList= filtered.toList(filtered.size());
@@ -939,9 +895,7 @@ var idxs = ee.List.sequence(0, count.subtract(2), 2);
 print('Pair start indices:', idxs);  
 
 
-
-
-var newmosaicList = idxs.map(function(i) {
+var newmosaicList = idxs.map(function(i) {  
   i = ee.Number(i);
   // Pull out image i and image i+1
   var img1 = ee.Image(mosaicList.get(i));
@@ -961,7 +915,7 @@ var newmosaicList = idxs.map(function(i) {
   return mosaic;
 });
 
-// 5) OPTIONAL: turn into an ImageCollection and visualize
+// visualise the mosaic images 
 var mosaicCol = ee.ImageCollection(newmosaicList);
 print('Mosaic collection:', mosaicCol);
 
