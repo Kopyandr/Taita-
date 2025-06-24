@@ -1,0 +1,161 @@
+# -*- coding: utf-8 -*-
+"""""
+Made by Hari enhenced by 
+
+
+Scaling factors are normalised MSS ,ETM, OLI, TM
+
+DATA PLOTING SCRIPT OF IPUT DIR. 
+
+COPUTES DIFFERENT INDICIES 
+
+run of file created by the data_filtering code to visualize the results 
+ 
+
+"""
+import pandas as pd
+import matplotlib.pyplot as plt
+import os
+import shutil
+import glob
+
+input_dirs = [
+    #r"C:\ajedes\Taita Hills\spectral signature\filtered"
+    #r"C:\ajedes\Taita Hills\spectral signature\training data GEE_2_2-20250513T122357Z-1-001\training data GEE_2_2",
+    #r"C:\ajedes\Taita Hills\spectral signature\training data GEE_2-20250513T121038Z-1-001\training data GEE_2" 
+    #r"C:\ajedes\Taita Hills\spectral signature\filtered\filtering_tests" 
+    #r"C:\ajedes\Taita Hills\spectral signature\filtered\filter_test_delete_all"
+    
+]
+
+
+output_dir = r"filtered/filter_delete_all_graphs"
+#r"graphs"
+#r"C:\ajedes\Taita Hills\spectral signature\filtered\filtered_graphs_2"
+
+def delete_path_if_exists(path):
+    if os.path.exists(path):
+        if os.path.isfile(path) or os.path.islink(path):
+            os.remove(path)
+        else:
+            shutil.rmtree(path)
+
+def plot_and_save_class6_lines(csv_path, prefix, output_dir):
+    df = pd.read_csv(csv_path)
+    # Drop unwanted columns
+    for drop_col in ['system:index', '.geo', 'THERMAL']:
+        if drop_col in df.columns:
+            df.drop(drop_col, axis=1, inplace=True)
+        df['SIPI'] = (df['NIR'] - df['BLUE']) / (df['NIR'] - df['RED']) #SIPI 
+        
+
+    os.makedirs(output_dir, exist_ok=True)
+    df['class6'] = df['class6'].astype(str)
+    feature_cols = df.columns.drop('class6') 
+
+    cls_dict = {
+        '1': 'Forest',
+        '2': 'Thicket',
+        '3': 'Shrubland',
+        '4': 'Grassland',
+        '5': 'Barren land'
+    }
+
+    
+    
+    for cls in df['class6'].unique():
+        subset = df[df['class6'] == cls]
+        plt.figure(figsize=(10, 6))
+        for _, row in subset.iterrows():
+            plt.plot(feature_cols, row[feature_cols], alpha=0.4)
+        plt.ylim(0, 2.5)  # Y axis scale 0 to 1 
+        cls_name = cls_dict.get(cls, f"Class{cls}")
+        plt.title(f'{prefix} – {cls_name} samples')
+        plt.xlabel('Spectral/Index Features')
+        plt.ylabel('Value')
+        plt.xticks(rotation=45)
+        plt.grid(True)
+        plt.tight_layout()
+        out = os.path.join(output_dir, f'{prefix}_{cls}_{cls_name}.png')
+        delete_path_if_exists(out)
+        plt.savefig(out)
+        plt.close()
+
+    # 2) Mean ± std for each class
+    for cls in df['class6'].unique():
+        subset = df[df['class6'] == cls]
+        means = subset[feature_cols].mean()
+        stds  = subset[feature_cols].std()
+        cls_name = cls_dict.get(cls, f"Class{cls}")
+
+        plt.figure(figsize=(10, 6))
+        plt.ylim(0, 2.5)  # Y axis scale 0 to 1 
+        plt.plot(feature_cols, means, label='Mean')
+        plt.fill_between(feature_cols,
+                         means - stds,
+                         means + stds,
+                         alpha=0.3,
+                         label='±1 STD')
+        plt.title(f'{prefix} – {cls_name} mean ± std')
+        plt.xlabel('Spectral/Index Features')
+        plt.ylabel('Value')
+        plt.xticks(rotation=45)
+        plt.grid(True)
+        plt.legend()
+        plt.tight_layout()
+        out = os.path.join(output_dir, f'{prefix}_{cls}_{cls_name}_mean_std.png')
+        delete_path_if_exists(out)
+        plt.savefig(out)
+        plt.close()
+
+    # 3) All-classes overlay (all samples faint)
+    plt.figure(figsize=(10, 6))
+    for _, row in df.iterrows():
+        plt.plot(feature_cols, row[feature_cols], alpha=0.2)
+    plt.ylim(0, 2.5)  # Y axis scale 0 to 1 
+    plt.title(f'{prefix} – all classes')
+    plt.xlabel('Spectral/Index Features')
+    plt.ylabel('Value')
+    plt.xticks(rotation=45)
+    plt.grid(True)
+    plt.tight_layout()
+    out = os.path.join(output_dir, f'{prefix}_all.png')
+    delete_path_if_exists(out)
+    #plt.savefig(out)
+    #plt.close()
+
+    # 4) All-classes mean ± std overlay
+    plt.figure(figsize=(10, 6))
+    plt.ylim(0, 2.5)  # Y axis scale 0 to 1 
+    for cls in df['class6'].unique():
+        subset = df[df['class6'] == cls]
+        means = subset[feature_cols].mean()
+        stds  = subset[feature_cols].std()
+        cls_name = cls_dict.get(cls, f"Class{cls}")
+        plt.plot(feature_cols, means, label=f'{cls_name} mean')
+        plt.fill_between(feature_cols,
+                         means - stds,
+                         means + stds,
+                         alpha=0.2)
+    plt.title(f'{prefix} – all classes mean ± std')
+    plt.xlabel('Spectral/Index Features')
+    plt.ylabel('Value')
+    plt.xticks(rotation=45)
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    out = os.path.join(output_dir, f'{prefix}_all_mean_std.png')
+    delete_path_if_exists(out)
+    plt.savefig(out)
+    plt.close()
+
+# ── Main loop ──
+for input_dir in input_dirs:
+    pattern = os.path.join(input_dir, "*.csv")
+    csv_paths = glob.glob(pattern)
+    print(f"Scanning {input_dir!r}, found {len(csv_paths)} CSV(s).")
+    for csv_path in csv_paths:
+        prefix = os.path.splitext(os.path.basename(csv_path))[0].replace("samples_", "")
+        plot_and_save_class6_lines(csv_path, prefix, output_dir)
+
+print("Done – plots saved to", output_dir)
