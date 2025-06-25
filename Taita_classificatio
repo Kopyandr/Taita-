@@ -819,7 +819,7 @@ function classification(img) {
     geometries: true
   });
   var withRand  = samples.randomColumn('rand', 42);
-  var trainSet  = withRand.filter(ee.Filter.lt('rand', 0.7));
+  var trainSet  = withRand.filter(ee.Filter.lt('rand', 0.7)); // 70% train set   
   var classifier= ee.Classifier.smileRandomForest(50)
                          .train({
                             features:   trainSet,
@@ -858,7 +858,6 @@ var imgList = classifiedCollection.toList(classifiedCollection.size());
 
 //________________________________________________________________________________________________
 // index grabing the pairs for mosaicing 
-
 var singleimages1= classifiedCollection // single images to show 
     .filter(ee.Filter.gte('year', 2012));
 var singleimages2=classifiedCollection  
@@ -883,9 +882,10 @@ for (var i = 0; i < count; i++) {
   );
 }
 
+
 var filtered = classifiedCollection
   .filter(ee.Filter.gte('year', 2005)) 
-  .filter(ee.Filter.lte('year', 2012)) // 
+  .filter(ee.Filter.lte('year', 2012))  
   .sort('year');
 
 var mosaicList= filtered.toList(filtered.size());
@@ -901,7 +901,7 @@ var newmosaicList = idxs.map(function(i) {
   var img1 = ee.Image(mosaicList.get(i));
   var img2 = ee.Image(mosaicList.get(i.add(1)));
   
-  // Decide which has lower meanNDVI → main vs fill
+  // Choose the main image --> lowest NDVI 
   var ndvi1 = ee.Number(img1.get('meanNDVI'));
   var ndvi2 = ee.Number(img2.get('meanNDVI'));
   var main  = ee.Image(ee.Algorithms.If(ndvi1.lte(ndvi2), img1, img2));
@@ -919,7 +919,7 @@ var newmosaicList = idxs.map(function(i) {
 var mosaicCol = ee.ImageCollection(newmosaicList);
 print('Mosaic collection:', mosaicCol);
 
-// (client-side) loop to add each mosaic with your palette6
+// loop an viz. the mozaics
 var years = mosaicCol.aggregate_array('year').getInfo();
 var n     = years.length;
 var list  = mosaicCol.toList(n);
@@ -933,3 +933,47 @@ for (var j = 0; j < n; j++) {
     false
   );
 }
+
+// acces the classification accuracy function 
+
+function accuracy(img) {
+  img = ee.Image(img);
+
+  // Get the right year’s training table & relabel
+  var yearKey = ee.Number(img.get('year')).format('%d');
+  var tableFC = ee.FeatureCollection(yearTableDict.get(yearKey))
+                   .map(reclass);
+
+  //  Recreate your 70/30 split with seed = 42
+  var testFC = tableFC
+    .randomColumn('rand', 42)
+    .filter(ee.Filter.gte('rand', 0.7));
+
+  // 
+  var samples = img.sampleRegions({
+    collection: testFC,
+    properties: ['class6'],
+    scale: 60,
+    geometries: true
+  });
+
+  // 
+  var cm  = samples.errorMatrix('class6', 'classification');
+  var acc = cm.accuracy();
+
+  var cmList = cm.array().toList();
+  //  print the matrix
+  //print('Confusion Matrix ' + yearKey, cm);
+
+  // Return the image with an 'accuracy' property
+  return img.set({
+    'accuracy':        acc,
+    'confusion_matrix': cmList
+  });
+}
+
+// Merge your mosaics + single images, then map:
+var classifiedMaps = mosaicCol.merge(singleimages)
+  .map(accuracy);
+
+print ('classimages',classifiedMaps);
