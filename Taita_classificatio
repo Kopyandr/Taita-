@@ -1,4 +1,3 @@
-// This is a code written during master thesis at Helsinki University
 var table = ee.FeatureCollection("projects/kopecnyjan/assets/1987_filtered_geo"),
     table2 = ee.FeatureCollection("projects/kopecnyjan/assets/1995_filtered_geo"),
     table3 = ee.FeatureCollection("projects/kopecnyjan/assets/2000_filtered_geo"),
@@ -12,20 +11,17 @@ var table = ee.FeatureCollection("projects/kopecnyjan/assets/1987_filtered_geo")
     table11 = ee.FeatureCollection("projects/kopecnyjan/assets/1860_filtered_geo");
 var Taita = ee.FeatureCollection("projects/kopecnyjan/assets/Taita_AOI"),
     data= ee.FeatureCollection("projects/kopecnyjan/assets/Training_pint_fix");
-//___________________________________________________Tuning the code -> Run certain parts of it__________________________________________________________
+//________________________________________________________________________________________________________________________________ 
+//                                  Tuning the code -> Run certain parts of the code
+////________________________________________________________________________________________________________________________________
 
+var loadImagecollection=true;
+var displayImagecollection=false;
+var displayComposites=false;
+var compositeTrick=true ;
+var runClassification=true;
+var runExportdata=false; //EXPORT CODE BLOCK MISSING 
 
-
-var loadImagecollection=true
-var displayImagecollection=false
-
-var displayComposites=false
-
-var compositeTrick=true // GUESS CHANGE THE NAME
-var runClassification=true
-var runExportdata=false // the code block missing 
-//________________________________________________________________________________________________________________________________
-  
 //________________________________________________________________________________________________________________________________
 //                                                    setings : 
 //_________________________________________________________________________________________________________________________________
@@ -35,8 +31,11 @@ var date =('2008-01-01', '2008-12-31');
 //var year= 2008;    
 var DrySeason1=[12,01,03,31]; // Month,Day,Month,Day Dec 1 to Mar 31 
 var DrySeason2=[6,01,10,31]; //June 1 to Oct 31
-var collection1='LANDSAT/LE07/C02/T1_L2'
-var cloudThreshold = 0.01;  
+
+var collection1='LANDSAT/LE07/C02/T1_L2';
+
+var cloudThreshold = 0.01; // cloud tresh hold can and should be very low 
+
 // Import Land-Trender module 
 //var ltgee = require('users/emaprlab/public:Modules/LandTrendr.js');
 
@@ -185,11 +184,8 @@ function getCloudFraction(image){
 }
 
 
-
-
-
 //__________________________________________________________________________________________________________________________________________
-//                      spectral functions: NDVI, EVI, TGC, TCW 
+//                      spectral functions: NDVI, EVI, TGC, TCW, SIPI 
 //                      calculate all indicies for Landsat 5-7,L8-9 and L2  
 //___________________________________________________________________________________________________________________________________________
 
@@ -330,11 +326,11 @@ function indices_LS2_sr(image) {
 
 // average NDVI value image 
 function getMeanNDVI(image) {
-  // Assumes 'NDVI' band already exists in the image
+  //'NDVI' band already exists in the image
   var meanNDVI = image.select('NDVI')
                       .reduceRegion({
                         reducer: ee.Reducer.mean(),
-                        geometry: Taita_AOI,  // or use image.geometry() if needed
+                        geometry: Taita_AOI,  // or use image.geometry() 
                         scale: 30,
                         maxPixels: 1e13
                       })
@@ -372,9 +368,9 @@ var visTOA = {
 };
 
 //____________________________________________________________________________________________________________________
-//                                                    Image collection 
+//                                        Image collection - LS2 Calibration ATM corection  
 //                              imports selected GLS 1975 Landsat images (MSS) and TOA products 
-//                          DN to TOA: https://yceo.yale.edu/how-convert-landsat-dns-top-atmosphere-toa-reflectance
+//                      calibrate DN values to TOA: https://yceo.yale.edu/how-convert-landsat-dns-top-atmosphere-toa-reflectance
 //                          than TOA -> SR by"Normalised Dark Object Reflectance Substraction" 
 //______________________________________________________________________________________________________________________
 //                                        Import LS2 MSS images 
@@ -426,12 +422,14 @@ var toa = radiance
   .multiply(ee.Image.constant(Math.PI).multiply(ee.Image.constant(d.pow(2))))
   .divide(ESUN.multiply(ee.Image.constant(cosZenith)));
 
+/*
 Map.addLayer(
   toa,
   { bands: ['30','20','10'], min: 0, max: 0.2 },
   'TOA Reflectance (GLS1975)'
 ,false);
 print('toa',toa)
+*/
 
 // Atmospheric corection using DOS  
 var dark = toa.reduceRegion({
@@ -485,6 +483,13 @@ var image1995 = indices_LS7(
 var raw2000 = ee.Image('LANDSAT/LE07/C02/T1_L2/LE07_167062_20000129');
 var image2000 = indices_LS7(
     getClouds2(applyScaleFactors(raw2000))
+  )
+  .clip(Taita_AOI);
+
+// 2002 LS7
+var raw2002=ee.Image('LANDSAT/LE07/C02/T1_L2/LE07_167062_20020713');
+var image2002 = indices_LS7(
+    getClouds2(applyScaleFactors(raw2002))
   )
   .clip(Taita_AOI);
 
@@ -552,12 +557,12 @@ Map.addLayer(image2023,vizParamsNDVI,'2015 NDVI',false);
                                       // get images of dry season from two consecutive years 
                                       // takes two least cloudy images 
                                       // creates a median composite of these 2 images 
+//________________________________________________________________________________________________________________________________                                      
+                                      // ALTERNATIVE - CURRENT VERSION:
+                                      // pics 2 least cloudy images from around given year
+                // later the images are classified and create a mosaic -> filing the missing pixels with othe classified image
+                                      
 //_________________________________________________________________________________________________________________________________
-
-//_________________________________________________________________________________________________________________________________
-
-//_________________________________________________________________________________________________________________________________
-
 
 function buildDryComposite(year, cloudThreshold) {
   // Get the four dry‐season windows around defined year 
@@ -575,10 +580,6 @@ function buildDryComposite(year, cloudThreshold) {
   var img1 = ee.Image(sortedList.get(0));
   var img2 = ee.Image(sortedList.get(1));
   
-  // Scale both images
-  //var img1_scaled = minMaxScale(img1)
-  //var img2_scaled = minMaxScale(img2)
-
   // create a median composite 
   var composite = ee.ImageCollection([img1, img2]).median();
 
@@ -672,13 +673,9 @@ function buildDryComposite(year, cloudThreshold) {
 var compositeList = [];
 var dryimageList=[];
 var years = [2002, 2005, 2007, 2008, 2009, 2011]; //years for composite images
-/*
-years.forEach(function(year) {
-  var comp = buildDryComposite(year, cloudThreshold);
-  compositeList.push(comp);
-});
-*/
 
+
+// create a list to loop over 
 var dryImageList = ee.List([]); // turn in to a ee.list 
 
 years.forEach(function(year) {
@@ -690,28 +687,18 @@ years.forEach(function(year) {
 //var drySeries = ee.ImageCollection(compositeList);
 //print('Dry‐season composites collection:', drySeries);
 
-// Add the images to the 
+// Add the images to the dry-images collection 
 var dryimages = ee.ImageCollection(dryImageList);
 print('Dry‐season composites collection:', dryimages);
 
 if(loadImagecollection===true){ 
 
-var allImages= images.merge(dryimages)
-    .sort('year', true); // sort by the year 1987 to 2023 
+// One collection with ALL IMAGES to analyse 
+var allImages= images.merge(dryimages)  
+    .sort('year', true);  
     
 print('allImages',allImages);
 }
-
-
-// convert to a dictionary for mapping 
-//___________________________________________________________________________________________________________________________
-
-  
-  
-  
-
- 
-
 
 //______________________________________________________________________________________________________________________________
 //                                  // reclass the training data + sample split  
@@ -768,13 +755,22 @@ function reclass(f) {
   var label  = nameMap.get(raw);
   return f.set('class6_name', label);
 }
-//____________________________________________________________________
+// ______________________________________________________________________________________________________________________________
+/*        
+                                                  CLASSIFICATION
+                                            Iterates through the images 
+                                      Based on metadata picks a corect training dataset
+                                              Trains a classifier
+                                        Returns collection of Classified images
+                                            
+*/
+// _________________________________________________________________________________________________________________________
 // Ling the training data tables to the years 
 var yearTableDict = ee.Dictionary({
   '1987': table,
   '1995': table2,
   '2000': table3,
-  '2002': table4,  //do not need compposite 
+  '2002': table4,  
   '2005': table5, //same year composite  
   '2007': table6,
   '2008': table7,
@@ -856,12 +852,20 @@ var classifiedCollection = ee.ImageCollection(
 var imgList = classifiedCollection.toList(classifiedCollection.size());
 
 
-//________________________________________________________________________________________________
+//______________________________________________________________________________________________________________________________
+//                                                    CREATE MOSAICS 
+//                                      Choose the ETM+ SLC - off period images 
+//                                      Pair up the 2 images as: mosaic = i + (i+1) image 
+//                                      Choses the 
+
+//______________________________________________________________________________________________________________________________
+
+
 // index grabing the pairs for mosaicing 
 var singleimages1= classifiedCollection // single images to show 
-    .filter(ee.Filter.gte('year', 2012));
+    .filter(ee.Filter.gte('year', 2013)); //>= 2012
 var singleimages2=classifiedCollection  
-    .filter(ee.Filter.lte('year', 2005));
+    .filter(ee.Filter.lte('year', 2004));
     
   
 var singleimages = singleimages1.merge(singleimages2)
@@ -919,21 +923,6 @@ var newmosaicList = idxs.map(function(i) {
 var mosaicCol = ee.ImageCollection(newmosaicList);
 print('Mosaic collection:', mosaicCol);
 
-// loop an viz. the mozaics
-var years = mosaicCol.aggregate_array('year').getInfo();
-var n     = years.length;
-var list  = mosaicCol.toList(n);
-for (var j = 0; j < n; j++) {
-  var m   = ee.Image(list.get(j));
-  var yr  = years[j];
-  Map.addLayer(
-    m,
-    {min: 1, max: 5, palette: palette6},
-    'Mosaic ' + yr,
-    false
-  );
-}
-
 // acces the classification accuracy function 
 
 function accuracy(img) {
@@ -972,8 +961,25 @@ function accuracy(img) {
   });
 }
 
+
 // Merge your mosaics + single images, then map:
 var classifiedMaps = mosaicCol.merge(singleimages)
-  .map(accuracy);
+  .map(accuracy)
+  .sort('year',true);
+
+var years = classifiedMaps.aggregate_array('year').getInfo();
+var n     = years.length;
+var list  = classifiedMaps.toList(n);
+for (var j = 0; j < n; j++) {
+  var m   = ee.Image(list.get(j));
+  var yr  = years[j];
+  Map.addLayer(
+    m,
+    {min: 1, max: 5, palette: palette6},
+    'Mosaic ' + yr,
+    false
+  );
+}
+
 
 print ('classimages',classifiedMaps);
