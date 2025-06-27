@@ -1,5 +1,5 @@
 var Taita = ee.FeatureCollection("projects/kopecnyjan/assets/Taita_AOI")
-var data = ee.FeatureCollection("projects/kopecnyjan/assets/TrainingPoints_Q_2");
+var data = ee.FeatureCollection("projects/kopecnyjan/assets/Training_pint_fix");
 //________________________________________________________________________________________________________________________________
 
 // the code creates composites: 
