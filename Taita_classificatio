@@ -26,6 +26,7 @@ var table = ee.FeatureCollection("projects/landuselandcovertaita/assets/1987_fil
     table11 = ee.FeatureCollection("projects/landuselandcovertaita/assets/1860_filtered_geo");
 var Taita = ee.FeatureCollection("projects/landuselandcovertaita/assets/Taita_AOI"),
     data = ee.FeatureCollection("projects/landuselandcovertaita/assets/Training_pint_fix");
+
 //________________________________________________________________________________________________________________________________ 
 //                                  Tuning the code -> Run certain parts of the code
 ////________________________________________________________________________________________________________________________________
@@ -35,25 +36,30 @@ var displayImagecollection=false;
 var displayComposites=false;
 var compositeTrick=true ;
 var runClassification=true;
-var runExportdata=false; //EXPORT CODE BLOCK MISSING 
+
+var runExportdata=false;// MASSIVE computation time  
+
+var exportAccuracy=false; //Missing the code block
 
 //________________________________________________________________________________________________________________________________
 //                                                    setings : 
 //_________________________________________________________________________________________________________________________________
+//var year= 2008; 
+
 
 var point=ee.Geometry.Point(38.3317876667455,-3.4533616115629027);
-var date =('2008-01-01', '2008-12-31'); 
-//var year= 2008;    
+
 var DrySeason1=[12,01,03,31]; // Month,Day,Month,Day Dec 1 to Mar 31 
 var DrySeason2=[6,01,10,31]; //June 1 to Oct 31
 
-var collection1='LANDSAT/LE07/C02/T1_L2';
+var collection1='LANDSAT/LE07/C02/T1_L2'; // Collection for the composite images
+var years = [2002, 2005, 2007, 2008, 2009, 2011]; //years for the SLC-off composite images
 
 var cloudThreshold = 0.01; // cloud tresh hold can and should be very low 
 
+
 // Import Land-Trender module 
 //var ltgee = require('users/emaprlab/public:Modules/LandTrendr.js');
-
 //________________________________________________________________________________________________________________________________
 //                                                    functions:   
 //_________________________________________________________________________________________________________________________________
@@ -606,7 +612,7 @@ function buildDryComposite(year, cloudThreshold) {
   var imageType= 'composite';
   var year1=ee.String(img1.get('DATE_ACQUIRED'));  
   var year2= ee.String(img2.get('DATE_ACQUIRED'));
-  var code='cc'+year 
+  var code='cc'+year ;
   
   
   // add metadata to the composite 
@@ -687,13 +693,14 @@ function buildDryComposite(year, cloudThreshold) {
 // loop over the list and extract the composites 
 var compositeList = [];
 var dryimageList=[];
-var years = [2002, 2005, 2007, 2008, 2009, 2011]; //years for composite images
+
 
 
 // create a list to loop over 
 var dryImageList = ee.List([]); // turn in to a ee.list 
 
-years.forEach(function(year) {
+// Loop over the years[] list defined in the settings:
+years.forEach(function(year) { 
   var imagePair = buildDryComposite(year, cloudThreshold);  // returns ee.List of 2 images
   dryImageList = dryImageList.cat(imagePair);               // concatenate to main list
 });
@@ -938,7 +945,11 @@ var newmosaicList = idxs.map(function(i) {
 var mosaicCol = ee.ImageCollection(newmosaicList);
 print('Mosaic collection:', mosaicCol);
 
-// acces the classification accuracy function 
+
+
+//____________________________________________________________________________________________________________________
+//                                  Classification accuracy function
+//____________________________________________________________________________________________________________________
 
 function accuracy(img) {
   img = ee.Image(img);
@@ -982,13 +993,15 @@ var classifiedMaps = mosaicCol.merge(singleimages)
   .map(accuracy)
   .sort('year',true);
 
+// add mosaics to the map 
 var years = classifiedMaps.aggregate_array('year').getInfo();
-var n     = years.length;
+var n     = years.length; // year lenght probably a problem 
 var list  = classifiedMaps.toList(n);
 for (var j = 0; j < n; j++) {
   var m   = ee.Image(list.get(j));
+
   var yr  = years[j];
-  Map.addLayer(
+Map.addLayer(
     m,
     {min: 1, max: 5, palette: palette6},
     'Mosaic ' + yr,
@@ -996,5 +1009,31 @@ for (var j = 0; j < n; j++) {
   );
 }
 
-
 print ('classimages',classifiedMaps);
+
+
+// Export the classified maps 
+if (runExportdata) {
+  
+  var count = classifiedMaps.size().getInfo();        
+  var mapList = classifiedMaps.toList(count);        
+
+  
+  var aoiGeom = Taita_AOI.union().geometry(); 
+
+  for (var i = 0; i < count; i++) {
+    var img = ee.Image(mapList.get(i));
+    var year = ee.Number(img.get('year')).getInfo();
+
+    Export.image.toDrive({
+      image: img,
+      description:     'Classified_' + year,
+      folder:          'GEE_exports',
+      fileNamePrefix:  'classified_' + year,
+      region:          aoiGeom,
+      scale:           30,
+      maxPixels:       1e13
+    });
+  }
+}
+
