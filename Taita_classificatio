@@ -1,4 +1,4 @@
-var table = ee.FeatureCollection("projects/kopecnyjan/assets/1987_filtered_geo"),
+/*var table = ee.FeatureCollection("projects/kopecnyjan/assets/1987_filtered_geo"),
     table2 = ee.FeatureCollection("projects/kopecnyjan/assets/1995_filtered_geo"),
     table3 = ee.FeatureCollection("projects/kopecnyjan/assets/2000_filtered_geo"),
     table4 = ee.FeatureCollection("projects/kopecnyjan/assets/2002_filtered_geo"),
@@ -10,7 +10,22 @@ var table = ee.FeatureCollection("projects/kopecnyjan/assets/1987_filtered_geo")
     table10 = ee.FeatureCollection("projects/kopecnyjan/assets/2015_filtered_geo"),
     table11 = ee.FeatureCollection("projects/kopecnyjan/assets/1860_filtered_geo");
 var Taita = ee.FeatureCollection("projects/kopecnyjan/assets/Taita_AOI"),
-    data= ee.FeatureCollection("projects/kopecnyjan/assets/Training_pint_fix");
+    data= ee.FeatureCollection("projects/kopecnyjan/assets/Training_pint_fix"); */
+    
+    
+var table = ee.FeatureCollection("projects/landuselandcovertaita/assets/1987_filtered"),
+    table2 = ee.FeatureCollection("projects/landuselandcovertaita/assets/1995_filtered"),
+    table3 = ee.FeatureCollection("projects/landuselandcovertaita/assets/2000_filtered"),
+    table4 = ee.FeatureCollection("projects/landuselandcovertaita/assets/2002_filtered"),
+    table5 = ee.FeatureCollection("projects/landuselandcovertaita/assets/2005_filtered"),
+    table6 = ee.FeatureCollection("projects/landuselandcovertaita/assets/2007_filtered"),
+    table7 = ee.FeatureCollection("projects/landuselandcovertaita/assets/2008_filtered"),
+    table8 = ee.FeatureCollection("projects/landuselandcovertaita/assets/2009_filtered"),
+    table9 = ee.FeatureCollection("projects/landuselandcovertaita/assets/2011_filtered"),
+    table10 = ee.FeatureCollection("projects/landuselandcovertaita/assets/2015_filtered"),
+    table11 = ee.FeatureCollection("projects/landuselandcovertaita/assets/1860_filtered_geo");
+var Taita = ee.FeatureCollection("projects/landuselandcovertaita/assets/Taita_AOI"),
+    data = ee.FeatureCollection("projects/landuselandcovertaita/assets/Training_pint_fix");
 //________________________________________________________________________________________________________________________________ 
 //                                  Tuning the code -> Run certain parts of the code
 ////________________________________________________________________________________________________________________________________
