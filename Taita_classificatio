@@ -37,9 +37,19 @@ var displayComposites=false;
 var compositeTrick=true ;
 var runClassification=true;
 
+var plotLandCoverChange=true;
+
 var runExportdata=false;// MASSIVE computation time  
 
-var exportAccuracy=false; //Missing the code block
+var exportAccuracy=false; //Missing the code block 
+
+/* To do list: 
+    Export accuracies
+    
+    Export of images work? 
+    
+    clean strange comments 
+*/
 
 //________________________________________________________________________________________________________________________________
 //                                                    setings : 
@@ -171,7 +181,7 @@ function getCloudMask (image) {
   return cloudMask; 
 } 
  
- //_____________________________________________________________cloud fraction_____________________________________________________________
+ // cloud fraction 
 function getCloudFraction(image){
   
   var cloudMask= getCloudMask(image); // call CloudMask function 
@@ -210,7 +220,7 @@ function getCloudFraction(image){
 //                      calculate all indicies for Landsat 5-7,L8-9 and L2  
 //___________________________________________________________________________________________________________________________________________
 
-// _____________________________________________________Landsat 7 -5 
+// Landsat 7 -5 
 function indices_LS7(image) {
   var ndvi = image.normalizedDifference(['SR_B4', 'SR_B3']).rename('NDVI');
 
@@ -581,7 +591,7 @@ Map.addLayer(image2023,vizParamsNDVI,'2015 NDVI',false);
 //________________________________________________________________________________________________________________________________                                      
                                       // ALTERNATIVE - CURRENT VERSION:
                                       // pics 2 least cloudy images from around given year
-                // later the images are classified and create a mosaic -> filing the missing pixels with othe classified image
+                // later the images are classified and create a mosaic -> filing the missing pixels with other classified image
                                       
 //_________________________________________________________________________________________________________________________________
 
@@ -787,7 +797,7 @@ function reclass(f) {
                                             
 */
 // _________________________________________________________________________________________________________________________
-// Ling the training data tables to the years 
+// Linpk the training data tables to the years 
 var yearTableDict = ee.Dictionary({
   '1987': table,
   '1995': table2,
@@ -879,7 +889,6 @@ var imgList = classifiedCollection.toList(classifiedCollection.size());
 //                                      Choose the ETM+ SLC - off period images 
 //                                      Pair up the 2 images as: mosaic = i + (i+1) image 
 //                                      Choses the 
-
 //______________________________________________________________________________________________________________________________
 
 
@@ -907,7 +916,6 @@ for (var i = 0; i < count; i++) {
     'Classification ' + year
   );
 }
-
 
 var filtered = classifiedCollection
   .filter(ee.Filter.gte('year', 2005)) 
@@ -949,6 +957,7 @@ print('Mosaic collection:', mosaicCol);
 
 //____________________________________________________________________________________________________________________
 //                                  Classification accuracy function
+//                                  acces the accuracy of the mosaic
 //____________________________________________________________________________________________________________________
 
 function accuracy(img) {
@@ -988,7 +997,7 @@ function accuracy(img) {
 }
 
 
-// Merge your mosaics + single images, then map:
+// Merge mosaics + single images, then map:
 var classifiedMaps = mosaicCol.merge(singleimages)
   .map(accuracy)
   .sort('year',true);
@@ -1010,7 +1019,6 @@ Map.addLayer(
 }
 
 print ('classimages',classifiedMaps);
-
 
 // Export the classified maps 
 if (runExportdata) {
@@ -1035,5 +1043,71 @@ if (runExportdata) {
       maxPixels:       1e13
     });
   }
+}
+
+
+// Function to calculate land cover area (%) for a classified image
+function getClassArea(image) {
+  var year = ee.Number(image.get('year'));
+  var areaImage = ee.Image.pixelArea().divide(1e6); // km2
+
+  var classStats = areaImage.addBands(image).reduceRegion({
+    reducer: ee.Reducer.sum().group({
+      groupField: 1, // band index for classes
+      groupName: 'class'
+    }),
+    geometry: Taita,
+    scale: 30,
+    maxPixels: 1e13
+  });
+
+  var groups = ee.List(classStats.get('groups'));
+  var totalArea = groups.map(function(g) {
+    return ee.Dictionary(g).get('sum');
+  }).reduce(ee.Reducer.sum());
+
+  var feats = groups.map(function(g) {
+    g = ee.Dictionary(g);
+    var cls = g.get('class');
+    var area = ee.Number(g.get('sum'));
+    var pct = area.divide(totalArea).multiply(100);
+    
+    var clsName = nameMap.get(cls);
+
+    
+    return ee.Feature(null, {
+      'year': year.format(),
+      'class': clsName,
+      'area_km2': area,
+      'percent': pct
+    });
+  });
+
+  return ee.FeatureCollection(feats);
+}
+if (plotLandCoverChange){
+// Map the function over the whole ImageCollection
+var stats = classifiedMaps.map(getClassArea).flatten();
+
+// Check results
+print('Area stats per year and class', stats);
+
+// Chart: land cover change (%) over time
+var chart = ui.Chart.feature.groups({
+  features: stats,
+  xProperty: 'year',
+  yProperty: 'percent',
+  seriesProperty: 'class'
+})
+.setChartType('LineChart')
+.setOptions({
+  title: 'Land Cover Change (%) in Taita Taveta',
+  colors: palette6, // #006400','#8B4513','#8a9b7e',#d2b578'#f7b869',#ADFF2F',#8c7b6b
+  hAxis: {title: 'Year'},
+  vAxis: {title: 'Area (%)'},
+  lineWidth: 5,
+  pointSize: 6
+});
+print(chart);
 }
 
