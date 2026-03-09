@@ -25,7 +25,7 @@ var table = ee.FeatureCollection("projects/landuselandcovertaita/assets/1987_fil
     table10 = ee.FeatureCollection("projects/landuselandcovertaita/assets/2015_filtered"),
     table11 = ee.FeatureCollection("projects/landuselandcovertaita/assets/1860_filtered_geo");
 var Taita = ee.FeatureCollection("projects/landuselandcovertaita/assets/Taita_AOI"),
-    data = ee.FeatureCollection("projects/landuselandcovertaita/assets/Training_pint_fix");
+    data = ee.FeatureCollection("projects/landuselandcovertaita/assets/Training_pint_fix"); //not needed 
 
 //________________________________________________________________________________________________________________________________ 
 //                                  Tuning the code -> Run certain parts of the code
@@ -743,7 +743,7 @@ print('allImages',allImages);
 // reclasifie the training data labels: 
 var validRaw = [1, 4, 5, 6, 8, 13]; // choose classes (do not use errors zeros values etc.)
 
-var qPoints = data.filter(ee.Filter.inList('class5',validRaw)); // filer data base on the previous step   
+//var qPoints = data.filter(ee.Filter.inList('class5',validRaw)); // filer data base on the previous step  // not needed!  
 var bands_L5 = ['SR_B1','SR_B2','SR_B3','SR_B4','SR_B5','SR_B7','NDVI','EVI','SIPI']; // choose  "bands" to 
 var bands_L8= ['SR_B2', 'SR_B3', 'SR_B4', 'SR_B5','SR_B6', 'SR_B7','NDVI', 'EVI','SIPI']; 
 var bands_L7 = ['SR_B1','SR_B2','SR_B3','SR_B4','SR_B5','SR_B7','NDVI','EVI','SIPI'];
