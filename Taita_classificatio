@@ -968,7 +968,7 @@ function accuracy(img) {
   var tableFC = ee.FeatureCollection(yearTableDict.get(yearKey))
                    .map(reclass);
 
-  //  Recreate your 70/30 split with seed = 42
+  //  Recreate 70/30 split with seed = 42
   var testFC = tableFC
     .randomColumn('rand', 42)
     .filter(ee.Filter.gte('rand', 0.7));
