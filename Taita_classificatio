@@ -12,7 +12,7 @@
 var Taita = ee.FeatureCollection("projects/kopecnyjan/assets/Taita_AOI"),
     data= ee.FeatureCollection("projects/kopecnyjan/assets/Training_pint_fix"); */
     
-    
+/*
 var table = ee.FeatureCollection("projects/landuselandcovertaita/assets/1987_filtered"),
     table2 = ee.FeatureCollection("projects/landuselandcovertaita/assets/1995_filtered"),
     table3 = ee.FeatureCollection("projects/landuselandcovertaita/assets/2000_filtered"),
@@ -23,10 +23,10 @@ var table = ee.FeatureCollection("projects/landuselandcovertaita/assets/1987_fil
     table8 = ee.FeatureCollection("projects/landuselandcovertaita/assets/2009_filtered"),
     table9 = ee.FeatureCollection("projects/landuselandcovertaita/assets/2011_filtered"),
     table10 = ee.FeatureCollection("projects/landuselandcovertaita/assets/2015_filtered"),
-    table11 = ee.FeatureCollection("projects/landuselandcovertaita/assets/1860_filtered_geo");
+    table11 = ee.FeatureCollection("projects/landuselandcovertaita/assets/2023_filtered_geo");
 var Taita = ee.FeatureCollection("projects/landuselandcovertaita/assets/Taita_AOI"),
-    data = ee.FeatureCollection("projects/landuselandcovertaita/assets/Training_pint_fix"); //not needed 
-
+    data = ee.FeatureCollection("projects/landuselandcovertaita/assets/Training_pint_fix");
+*/
 //________________________________________________________________________________________________________________________________ 
 //                                  Tuning the code -> Run certain parts of the code
 ////________________________________________________________________________________________________________________________________
@@ -38,10 +38,10 @@ var compositeTrick=true ;
 var runClassification=true;
 
 var plotLandCoverChange=true;
+var exportAccuracy=true; 
 
-var runExportdata=false;// MASSIVE computation time  
-
-var exportAccuracy=false; //Missing the code block 
+var runExportdata=false;// MASSIVE computation time 
+  
 
 /* To do list: 
     Export accuracies
@@ -50,7 +50,6 @@ var exportAccuracy=false; //Missing the code block
     
     clean strange comments 
 */
-
 //________________________________________________________________________________________________________________________________
 //                                                    setings : 
 //_________________________________________________________________________________________________________________________________
@@ -396,8 +395,7 @@ var visTOA = {
   min:   0.0,                // 0% reflectance
   max:   0.3,                // 30% reflectance
   gamma: 1.4
-};
-
+}; 
 //____________________________________________________________________________________________________________________
 //                                        Image collection - LS2 Calibration ATM corection  
 //                              imports selected GLS 1975 Landsat images (MSS) and TOA products 
@@ -663,6 +661,7 @@ function buildDryComposite(year, cloudThreshold) {
   
  var year_1= img1.get('year').getInfo();
  var year_2= img2.get('year').getInfo();
+ 
   // Add the composite to the map
   if (displayComposites===true){
   
@@ -697,14 +696,11 @@ function buildDryComposite(year, cloudThreshold) {
   
 }
  return ee.List([img1,img2]);
-      
 }
 
 // loop over the list and extract the composites 
 var compositeList = [];
 var dryimageList=[];
-
-
 
 // create a list to loop over 
 var dryImageList = ee.List([]); // turn in to a ee.list 
@@ -743,8 +739,14 @@ print('allImages',allImages);
 // reclasifie the training data labels: 
 var validRaw = [1, 4, 5, 6, 8, 13]; // choose classes (do not use errors zeros values etc.)
 
-//var qPoints = data.filter(ee.Filter.inList('class5',validRaw)); // filer data base on the previous step  // not needed!  
-var bands_L5 = ['SR_B1','SR_B2','SR_B3','SR_B4','SR_B5','SR_B7','NDVI','EVI','SIPI']; // choose  "bands" to 
+
+//_________________________________________________________________________
+// here qPoints are created from some imported points, which we dont know where they coming 
+//from lol probably just traning points locations?  
+//__________________________________________________________________________________________________________________________________
+
+//var qPoints = data.filter(ee.Filter.inList('class5',validRaw)); // filer data base on the previous step   
+var bands_L5 = ['SR_B1','SR_B2','SR_B3','SR_B4','SR_B5','SR_B7','NDVI','EVI','SIPI']; // choose  "bands" used for trainig 
 var bands_L8= ['SR_B2', 'SR_B3', 'SR_B4', 'SR_B5','SR_B6', 'SR_B7','NDVI', 'EVI','SIPI']; 
 var bands_L7 = ['SR_B1','SR_B2','SR_B3','SR_B4','SR_B5','SR_B7','NDVI','EVI','SIPI'];
 var bands_L2 = ['10','20','30','40','NDVI']; 
@@ -753,7 +755,7 @@ var bands_L2 = ['10','20','30','40','NDVI'];
 // _________________________________________________________________________________________________________________________
 //                                      Loop classification 
 //                          The training data are two sets : 2023 -> needs reclysifiing 
-//                          Data 1987 to 2015 - already class6 format -> dont need reclasifiing
+//                          Data 1987 to 2015 - already class6(means 5 classes) format -> dont need reclasifiing
 //                          1=Forest, 2=Bush/Shrub, 3=Grassland/Cropland, 4=Barren, 5=Others
 // _________________________________________________________________________________________________________________________
 
@@ -829,6 +831,8 @@ function classification(img) {
   var imageType= ee.String(img.get('image_type')); 
   var sensor   = ee.String(img.get('SPACECRAFT_ID'));
   var data     = ee.FeatureCollection(yearTableDict.get(yearKey));
+  var id = img.get('system:id'); //new 
+  
 
   var bands = ee.List(
     ee.Algorithms.If(sensor.equals('LANDSAT_2'), bands_L2,
@@ -847,7 +851,10 @@ function classification(img) {
     geometries: true
   });
   var withRand  = samples.randomColumn('rand', 42);
-  var trainSet  = withRand.filter(ee.Filter.lt('rand', 0.7)); // 70% train set   
+  var trainSet  = withRand.filter(ee.Filter.lt('rand', 0.7)); // 70% train set  
+  
+  //var testFC = withRand.filter(ee.Filter.gte('rand',0.7)); // 30% test set // ****new
+  
   var classifier= ee.Classifier.smileRandomForest(50)
                          .train({
                             features:   trainSet,
@@ -856,7 +863,7 @@ function classification(img) {
                           });
   var classified = img.select(bands).classify(classifier);
 
-  // Compute mean NDVI for metadata
+  // Compute mean NDVI metadata
   var meanNDVI = img.select('NDVI')
                     .reduceRegion({
                       reducer: ee.Reducer.mean(),
@@ -866,11 +873,12 @@ function classification(img) {
                     })
                     .get('NDVI');
 
-  // *** SIMPLIFIED RETURN: just the classified image with properties ***
+  //  RETURN info just the classified image with properties 
   return classified.set({
     'year':      year,
     'meanNDVI':  meanNDVI,
-    'image_type': imageType
+    'image_type': imageType,
+    'id':id // new n
   });
 }
 
@@ -891,25 +899,26 @@ var imgList = classifiedCollection.toList(classifiedCollection.size());
 //                                      Choses the 
 //______________________________________________________________________________________________________________________________
 
-
 // index grabing the pairs for mosaicing 
 var singleimages1= classifiedCollection // single images to show 
     .filter(ee.Filter.gte('year', 2013)); //>= 2012
 var singleimages2=classifiedCollection  
-    .filter(ee.Filter.lte('year', 2004));
+    .filter(ee.Filter.lte('year', 2004)); //<= 2004 
     
-  
+// merge the sngel images in to one group   
 var singleimages = singleimages1.merge(singleimages2)
-      .sort('year');
+      .sort('year'); // sort by year 
 print ('single images', singleimages);
 
-var singleImageList= singleimages.toList(singleimages.size());
+var singleImageList= singleimages.toList(singleimages.size()); // create a list 
+
 
 for (var i = 0; i < count; i++) {
-  var img = ee.Image(singleImageList.get(i));
+  var img = ee.Image(singleImageList.get(i)); // from the singleImage list 
   // grab the year metadata client-side for labeling
   var year = img.get('year').getInfo();
   
+  // add to map 
   Map.addLayer(
     img,
     { min: 1, max: 5, palette: palette6 },
@@ -917,14 +926,18 @@ for (var i = 0; i < count; i++) {
   );
 }
 
+print('clasified_colection',classifiedCollection);
+
+// grab the SLC-off images 
 var filtered = classifiedCollection
-  .filter(ee.Filter.gte('year', 2005)) 
-  .filter(ee.Filter.lte('year', 2012))  
-  .sort('year');
+  .filter(ee.Filter.gte('year', 2005)) // >=2005
+  .filter(ee.Filter.lte('year', 2012)) // =<2012
+  .sort('year'); // sort by year 
 
-var mosaicList= filtered.toList(filtered.size());
-var count=mosaicList.size();
 
+var mosaicList= filtered.toList(filtered.size()); 
+ 
+var count = mosaicList.size();
 var idxs = ee.List.sequence(0, count.subtract(2), 2);
 print('Pair start indices:', idxs);  
 
@@ -941,10 +954,14 @@ var newmosaicList = idxs.map(function(i) {
   var main  = ee.Image(ee.Algorithms.If(ndvi1.lte(ndvi2), img1, img2));
   var fill  = ee.Image(ee.Algorithms.If(ndvi1.lte(ndvi2), img2, img1));
   
-  // Create the mosaic and carry forward the year
+  
+// Create the mosaic and carry forward the year
   var mosaic = main.unmask(fill)
                    .rename('classification')
-                   .set('year', main.get('year'));
+                   .set('main_image_year', main.get('year'))
+                   .set('fill_image_year',fill.get('year'))
+                   .set('main_ID',main.get('id')) //new 
+                   .set('fill_ID',fill.get('id'));//new
   
   return mosaic;
 });
@@ -952,8 +969,6 @@ var newmosaicList = idxs.map(function(i) {
 // visualise the mosaic images 
 var mosaicCol = ee.ImageCollection(newmosaicList);
 print('Mosaic collection:', mosaicCol);
-
-
 
 //____________________________________________________________________________________________________________________
 //                                  Classification accuracy function
@@ -968,7 +983,7 @@ function accuracy(img) {
   var tableFC = ee.FeatureCollection(yearTableDict.get(yearKey))
                    .map(reclass);
 
-  //  Recreate 70/30 split with seed = 42
+  //  Recreate70/30 split with seed = 42
   var testFC = tableFC
     .randomColumn('rand', 42)
     .filter(ee.Filter.gte('rand', 0.7));
@@ -986,7 +1001,7 @@ function accuracy(img) {
   var acc = cm.accuracy();
 
   var cmList = cm.array().toList();
-  //  print the matrix
+  //print the matrix
   //print('Confusion Matrix ' + yearKey, cm);
 
   // Return the image with an 'accuracy' property
@@ -1001,9 +1016,11 @@ function accuracy(img) {
 var classifiedMaps = mosaicCol.merge(singleimages)
   .map(accuracy)
   .sort('year',true);
+  
+
 
 // add mosaics to the map 
-var years = classifiedMaps.aggregate_array('year').getInfo();
+var years =  classifiedMaps.aggregate_array('year').getInfo();
 var n     = years.length; // year lenght probably a problem 
 var list  = classifiedMaps.toList(n);
 for (var j = 0; j < n; j++) {
@@ -1018,7 +1035,26 @@ Map.addLayer(
   );
 }
 
-print ('classimages',classifiedMaps);
+print ('LandCover maps + accuracy', classifiedMaps);
+
+// Export the accuracies in csv files
+if (exportAccuracy) {
+var accuracyTable = classifiedMaps.map(function(img) {
+  img = ee.Image(img);
+  
+  return ee.Feature(null, {
+    year: img.get('year'),
+    accuracy: img.get('accuracy'),
+    confusion_matrix: img.get('confusion_matrix')
+  });
+});
+
+Export.table.toDrive({
+  collection: accuracyTable,
+  description: 'Accuracy_Metrics',
+  fileFormat: 'CSV'
+});
+}
 
 // Export the classified maps 
 if (runExportdata) {
@@ -1044,7 +1080,6 @@ if (runExportdata) {
     });
   }
 }
-
 
 // Function to calculate land cover area (%) for a classified image
 function getClassArea(image) {
